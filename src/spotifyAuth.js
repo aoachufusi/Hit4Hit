@@ -10,6 +10,18 @@ export const SPOTIFY_SCOPES = [
 ].join(" ");
 
 const PKCE_VERIFIER_KEY = "spotify_pkce_verifier";
+const PKCE_REDIRECT_KEY = "spotify_pkce_redirect";
+
+/** Redirect URI must match the tab you're on (host + port). */
+export function getRedirectUri() {
+  if (typeof window !== "undefined") {
+    const runtime = `${window.location.origin}/callback`;
+    // Dev: always match the running Vite URL (5173 vs 5174, etc.)
+    if (import.meta.env.DEV) return runtime;
+    return REDIRECT_URI || runtime;
+  }
+  return REDIRECT_URI;
+}
 
 function randomString(length) {
   const possible =
@@ -33,14 +45,18 @@ async function sha256(plain) {
 }
 
 export async function buildAuthorizeUrl() {
-  if (!CLIENT_ID || !REDIRECT_URI) {
-    throw new Error(
-      "Set VITE_SPOTIFY_CLIENT_ID and VITE_SPOTIFY_REDIRECT_URI in .env"
-    );
+  if (!CLIENT_ID) {
+    throw new Error("Set VITE_SPOTIFY_CLIENT_ID in .env");
+  }
+
+  const redirectUri = getRedirectUri();
+  if (!redirectUri) {
+    throw new Error("Could not determine Spotify redirect URI");
   }
 
   const codeVerifier = randomString(64);
   sessionStorage.setItem(PKCE_VERIFIER_KEY, codeVerifier);
+  sessionStorage.setItem(PKCE_REDIRECT_KEY, redirectUri);
 
   const codeChallenge = base64UrlEncode(await sha256(codeVerifier));
   const state = randomString(16);
@@ -49,7 +65,7 @@ export async function buildAuthorizeUrl() {
     response_type: "code",
     client_id: CLIENT_ID,
     scope: SPOTIFY_SCOPES,
-    redirect_uri: REDIRECT_URI,
+    redirect_uri: redirectUri,
     code_challenge_method: "S256",
     code_challenge: codeChallenge,
     state,
@@ -64,10 +80,13 @@ export async function exchangeCodeForToken(code) {
     throw new Error("Missing PKCE verifier — try logging in again");
   }
 
+  const redirectUri =
+    sessionStorage.getItem(PKCE_REDIRECT_KEY) || getRedirectUri();
+
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
-    redirect_uri: REDIRECT_URI,
+    redirect_uri: redirectUri,
     client_id: CLIENT_ID,
     code_verifier: codeVerifier,
   });
@@ -79,6 +98,7 @@ export async function exchangeCodeForToken(code) {
   });
 
   sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+  sessionStorage.removeItem(PKCE_REDIRECT_KEY);
 
   if (!res.ok) {
     const text = await res.text();
