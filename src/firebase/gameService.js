@@ -1,5 +1,5 @@
 import {
-  ref, set, get, update, onValue, off,
+  ref, set, get, update, onValue,
 } from "firebase/database";
 import { db, isFirebaseConfigured } from "./config.js";
 
@@ -53,12 +53,18 @@ export async function castVote(code, judgeName, vote) {
 
 // ── Real-time listener — call this when joining a game
 // Returns an unsubscribe function — call it on component unmount
-export function subscribeToGame(code, onChange) {
+export function subscribeToGame(code, onChange, onError) {
   const gameRef = ref(requireDb(), `games/${code}`);
-  onValue(gameRef, (snap) => {
-    if (snap.exists()) onChange(snap.val());
-  });
-  return () => off(gameRef);
+  return onValue(
+    gameRef,
+    (snap) => {
+      if (snap.exists()) onChange(snap.val());
+    },
+    (err) => {
+      console.error("subscribeToGame error", err);
+      onError?.(err);
+    }
+  );
 }
 
 // ── Delete game when finished (keep DB clean)

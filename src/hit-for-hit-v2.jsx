@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
+  normalizeGameState,
+  toArray,
+  displayName,
+} from "./gameStateUtils.js";
+import {
   createGame as firebaseCreateGame,
   getGame,
   updateGame,
@@ -7,6 +12,7 @@ import {
   castVote as firebaseCastVote,
   deleteGame,
 } from "./firebase/gameService.js";
+import { isFirebaseConfigured } from "./firebase/config.js";
 import { useSpotify } from "./useSpotify.js";
 import SpotifySongPicker from "./SpotifySongPicker.jsx";
 
@@ -107,41 +113,6 @@ function getJudgeBallotId(code) {
   } catch {
     return `b_${code}_${Math.random().toString(36).slice(2)}`;
   }
-}
-
-/** Firebase RTDB stores arrays as { "0": …, "1": … }; coerce back to arrays. */
-function toArray(val) {
-  if (Array.isArray(val)) return val;
-  if (val && typeof val === "object") {
-    return Object.keys(val)
-      .filter((k) => /^\d+$/.test(k))
-      .sort((a, b) => Number(a) - Number(b))
-      .map((k) => val[k]);
-  }
-  return [];
-}
-
-/** Normalize older saved games + Firebase list shapes. */
-function normalizeGameState(g) {
-  if (!g) return g;
-  const hostName = g.hostName || g.player1 || "";
-  let members = toArray(g.members);
-  if (members.length === 0) {
-    members = [
-      ...new Set(
-        [hostName, g.player2, ...toArray(g.judges)].filter(Boolean)
-      ),
-    ];
-  }
-  const scores = toArray(g.scores);
-  return {
-    ...g,
-    hostName,
-    members,
-    judges: toArray(g.judges),
-    scores: scores.length >= 2 ? scores : [scores[0] ?? 0, scores[1] ?? 0],
-    roundHistory: toArray(g.roundHistory),
-  };
 }
 
 function countAnonymousVotes(votes) {
@@ -299,10 +270,19 @@ export default function HitForHit() {
 
   const startListening = useCallback((code) => {
     if (unsubRef.current) unsubRef.current();
-    unsubRef.current = subscribeToGame(code, (fresh) => {
-      setGs(normalizeGameState(fresh));
-      setConnStatus("ok");
-    });
+    unsubRef.current = subscribeToGame(
+      code,
+      (fresh) => {
+        try {
+          setGs(normalizeGameState(fresh));
+          setConnStatus("ok");
+        } catch (e) {
+          console.error("Game state sync failed", e);
+          setConnStatus("error");
+        }
+      },
+      () => setConnStatus("error")
+    );
   }, []);
 
   useEffect(() => {
@@ -493,12 +473,13 @@ export default function HitForHit() {
       showToast("Pick two different people for Player 1 and Player 2.");
       return;
     }
-    if (!gs.members?.includes(p1) || !gs.members?.includes(p2)) {
+    if (!toArray(gs.members).includes(p1) || !toArray(gs.members).includes(p2)) {
       showToast("Both players must be people already in the lobby.");
       return;
     }
-    const judges = gs.members.filter((n) => n !== p1 && n !== p2);
-    if (gs.members.length < 3 || judges.length < 1) {
+    const lobbyMembers = toArray(gs.members);
+    const nextJudges = lobbyMembers.filter((n) => n !== p1 && n !== p2);
+    if (lobbyMembers.length < 3 || nextJudges.length < 1) {
       showToast("Need at least 3 people in the lobby: 2 music players + 1 judge.");
       return;
     }
@@ -507,7 +488,7 @@ export default function HitForHit() {
       await updateGame(gs.code, {
         player1: p1,
         player2: p2,
-        judges,
+        judges: nextJudges,
         artist1: "",
         artist2: "",
       });
@@ -723,12 +704,16 @@ export default function HitForHit() {
   const myVote      = looksBallot ? votes[ballotId] : votes[myName];
   const myHasVoted  = myVote !== undefined;
 
-  const gameWinner  = !gs ? -1 : gs.scores[0] > gs.scores[1] ? 0 : gs.scores[1] > gs.scores[0] ? 1 : -1;
+  const gameWinner  = !gs ? -1 : (scores[0] ?? 0) > (scores[1] ?? 0) ? 0 : (scores[1] ?? 0) > (scores[0] ?? 0) ? 1 : -1;
   const gameLoser   = gameWinner === 0 ? 1 : gameWinner === 1 ? 0 : -1;
 
-  const p1name = gs?.player1 || "Player 1";
-  const p2name = gs?.player2 || "Player 2";
+  const p1name = displayName(gs?.player1, "Player 1");
+  const p2name = displayName(gs?.player2, "Player 2");
   const players = [p1name, p2name];
+  const members = gs ? toArray(gs.members) : [];
+  const judges = gs ? toArray(gs.judges) : [];
+  const roundHistory = gs ? toArray(gs.roundHistory) : [];
+  const scores = gs ? toArray(gs.scores) : [0, 0];
 
   // ── STYLES ────────────────────────────────────────────────────────────────
   const css = `
@@ -850,6 +835,12 @@ export default function HitForHit() {
 
       <main style={{maxWidth:500,margin:"0 auto",padding:"1.25rem 1rem 3rem"}}>
 
+        {(screen==="lobby" || screen==="game") && !gs && (
+          <div className="card slide-up" style={{padding:"2rem",textAlign:"center"}}>
+            <div className="pulse bf" style={{color:MUTED1,fontSize:14}}>Syncing game…</div>
+          </div>
+        )}
+
         {/* ════════════════════════ HOME ════════════════════════ */}
         {screen==="home" && (
           <div className="slide-up">
@@ -868,6 +859,14 @@ export default function HitForHit() {
                 🔑 Join with Code
               </button>
             </div>
+
+            {!isFirebaseConfigured && (
+              <div className="card" style={{padding:"1rem 1.25rem",marginBottom:"1rem",borderColor:"#f8717144",textAlign:"left"}}>
+                <div className="bf" style={{color:"#f87171",fontSize:13,lineHeight:1.5}}>
+                  Firebase is not configured. Add <code>VITE_FIREBASE_*</code> to <code>.env</code>, save the file, and restart <code>npm run dev</code>.
+                </div>
+              </div>
+            )}
 
             <div className="card" style={{padding:"1rem 1.25rem"}}>
               <div className="hd" style={{fontSize:15,letterSpacing:".07em",color:MUTED2,marginBottom:10}}>HOW IT WORKS</div>
@@ -963,10 +962,10 @@ export default function HitForHit() {
             <div className="card" style={{padding:"1rem 1.25rem",marginBottom:10}}>
               <div className="hd" style={{fontSize:14,letterSpacing:".07em",color:MUTED2,marginBottom:8}}>IN THE LOBBY</div>
               <div className="bf" style={{color:MUTED1,fontSize:12,lineHeight:1.5,marginBottom:8}}>
-                {(gs.members||[]).length} / {2+gs.maxJudges} people · Host picks two music players; everyone else judges.
+                {members.length} / {2+gs.maxJudges} people · Host picks two music players; everyone else judges.
               </div>
               <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {(gs.members||[]).map((m,i)=>(
+                {members.map((m,i)=>(
                   <span key={i} className="pill" style={{background:`${C}18`,border:`1px solid ${C}44`,color:"#c084fc"}}>
                     <UserIcon/> {m} {m===myName&&<span style={{color:C,fontSize:9}}>you</span>}
                   </span>
@@ -984,14 +983,14 @@ export default function HitForHit() {
                   <div className="bf" style={{fontSize:10,color:MUTED2,marginBottom:4}}>Player 1 (purple side)</div>
                   <select className="inp" style={{fontSize:13,cursor:"pointer"}} value={hostPickP1} onChange={(e)=>setHostPickP1(e.target.value)}>
                     <option value="">—</option>
-                    {(gs.members||[]).map((m)=>(<option key={m} value={m}>{m}</option>))}
+                    {members.map((m)=>(<option key={m} value={m}>{m}</option>))}
                   </select>
                 </div>
                 <div style={{marginBottom:12}}>
                   <div className="bf" style={{fontSize:10,color:MUTED2,marginBottom:4}}>Player 2 (lavender side)</div>
                   <select className="inp" style={{fontSize:13,cursor:"pointer"}} value={hostPickP2} onChange={(e)=>setHostPickP2(e.target.value)}>
                     <option value="">—</option>
-                    {(gs.members||[]).map((m)=>(<option key={`p2-${m}`} value={m}>{m}</option>))}
+                    {members.map((m)=>(<option key={`p2-${m}`} value={m}>{m}</option>))}
                   </select>
                 </div>
                 <button type="button" className="btn" style={{background:C,color:"#fff",fontSize:16}} onClick={assignPlayersFromLobby}>
@@ -1098,14 +1097,14 @@ export default function HitForHit() {
             <div className="card" style={{padding:"1rem 1.25rem",marginBottom:"1.25rem"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                 <div className="hd" style={{fontSize:14,letterSpacing:".07em",color:MUTED2}}>JUDGES</div>
-                <span className="bf" style={{color:MUTED3,fontSize:11}}>{gs.judges?.length||0}/{gs.maxJudges}</span>
+                <span className="bf" style={{color:MUTED3,fontSize:11}}>{judges.length}/{gs.maxJudges}</span>
               </div>
               {(!gs.player1 || !gs.player2)
                 ? <div className="bf" style={{color:MUTED3,fontSize:13}}>Everyone who is not a music player will judge once the host locks in the two players.</div>
-                : gs.judges?.length===0
+                : judges.length === 0
                   ? <div className="bf" style={{color:MUTED3,fontSize:13}}>No judges (only the two players in the room).</div>
                   : <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                      {gs.judges.map((j,i)=>(
+                      {judges.map((j,i)=>(
                         <span key={i} className="pill" style={{background:`${C}18`,border:`1px solid ${C}44`,color:"#c084fc"}}>
                           <UserIcon/> {j} {j===myName&&<span style={{color:C,fontSize:9}}>you</span>}
                         </span>
@@ -1143,15 +1142,15 @@ export default function HitForHit() {
                     <div key={i} style={{textAlign:i===0?"left":"right"}}>
                       <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[i]}}>{players[i].toUpperCase()}</div>
                       <div className="bf" style={{color:MUTED3,fontSize:10}}>{i===0?gs.artist1:gs.artist2}</div>
-                      <div className="hd" style={{fontSize:36,color:COLORS[i],lineHeight:1}}>{gs.scores[i]}</div>
+                      <div className="hd" style={{fontSize:36,color:COLORS[i],lineHeight:1}}>{scores[i] ?? 0}</div>
                     </div>
                   ))}
                   <div className="hd" style={{color:MUTED3,fontSize:18,textAlign:"center"}}>VS</div>
                 </div>
                 <div style={{display:"flex",gap:3,height:4,borderRadius:2,overflow:"hidden",marginBottom:"1.5rem"}}>
-                  <div style={{background:C,width:`${gs.scores[0]/gs.rounds*100}%`,transition:"width .5s"}}/>
+                  <div style={{background:C,width:`${((scores[0] ?? 0)/gs.rounds)*100}%`,transition:"width .5s"}}/>
                   <div style={{flex:1,background:SURFACE2}}/>
-                  <div style={{background:C2,width:`${gs.scores[1]/gs.rounds*100}%`,transition:"width .5s"}}/>
+                  <div style={{background:C2,width:`${((scores[1] ?? 0)/gs.rounds)*100}%`,transition:"width .5s"}}/>
                 </div>
               </>
             )}
@@ -1170,7 +1169,7 @@ export default function HitForHit() {
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                         <MicIcon/>
                         <span className="hd" style={{color:COLORS[isPlayer1?0:1],fontSize:14,letterSpacing:".05em"}}>
-                          {(isPlayer1?gs.player1:gs.player2).toUpperCase()}
+                          {(isPlayer1?displayName(gs.player1):displayName(gs.player2)).toUpperCase()}
                         </span>
                         <span className="bf" style={{color:MUTED2,fontSize:11}}>({isPlayer1?gs.artist1:gs.artist2})</span>
                         <span className="bf" style={{color:MUTED3,fontSize:10}}>(you)</span>
@@ -1205,7 +1204,7 @@ export default function HitForHit() {
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
                         <MicIcon/>
                         <span className="hd" style={{color:COLORS[isPlayer1?1:0],fontSize:14}}>
-                          {(isPlayer1?gs.player2:gs.player1).toUpperCase()}
+                          {(isPlayer1?displayName(gs.player2):displayName(gs.player1)).toUpperCase()}
                         </span>
                         <span className="bf" style={{color:MUTED2,fontSize:11}}>({isPlayer1?gs.artist2:gs.artist1})</span>
                       </div>
@@ -1233,10 +1232,25 @@ export default function HitForHit() {
                 )}
 
                 {/* Round history */}
-                {(toArray(gs.roundHistory).length > 0) && (
+                {!isPlayer && !isJudge && (
+                  <div className="card" style={{padding:"1.5rem",textAlign:"center"}}>
+                    <div className="bf" style={{color:MUTED1,fontSize:14,marginBottom:8}}>
+                      {isHost ? "You’re hosting — waiting for both players to lock in their songs." : "Waiting for the music players to pick their songs…"}
+                    </div>
+                    <div style={{display:"flex",gap:12,justifyContent:"center",marginTop:8}}>
+                      {[0,1].map(i=>(
+                        <div key={i} className="bf" style={{fontSize:11,color: (i===0?gs.p1Ready:gs.p2Ready)?"#4ade80":MUTED3}}>
+                          {players[i]}: {(i===0?gs.p1Ready:gs.p2Ready)?"ready ✓":"picking…"}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {roundHistory.length > 0 && (
                   <div style={{marginTop:"1.5rem"}}>
                     <div className="hd" style={{fontSize:13,letterSpacing:".08em",color:MUTED3,marginBottom:6}}>PREVIOUS ROUNDS</div>
-                    {toArray(gs.roundHistory).map((r,i)=>(
+                    {roundHistory.map((r,i)=>(
                       <div key={i} className="hrow bf" style={{fontSize:12}}>
                         <span style={{color:MUTED3}}>R{r.round}</span>
                         <span style={{color:C,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.song1}</span>
@@ -1364,7 +1378,7 @@ export default function HitForHit() {
                   {[0,1].map(i=>(
                     <div key={i} style={{background:gs.roundWinner===i?COLORS_DIM[i]:SURFACE,border:`1px solid ${gs.roundWinner===i?COLORS[i]+"55":BORDER}`,borderRadius:10,padding:"1rem"}}>
                       <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[i],marginBottom:2}}>{players[i].toUpperCase()}</div>
-                      <div className="hd" style={{fontSize:42,color:COLORS[i],lineHeight:1}}>{gs.scores[i]}</div>
+                      <div className="hd" style={{fontSize:42,color:COLORS[i],lineHeight:1}}>{scores[i] ?? 0}</div>
                       <div className="bf" style={{color:MUTED2,fontSize:11}}>wins</div>
                     </div>
                   ))}
@@ -1393,7 +1407,7 @@ export default function HitForHit() {
                     </div>
                     <div className="bf" style={{color:COLORS[gameWinner],fontSize:13,marginBottom:2}}>{(gameWinner===0?gs.artist1:gs.artist2).toUpperCase()} STAN</div>
                     <div className="bf" style={{color:MUTED2,fontSize:12,marginBottom:"2rem"}}>
-                      {gs.scores[gameWinner]}–{gs.scores[gameWinner===0?1:0]} rounds
+                      {scores[gameWinner] ?? 0}–{scores[gameWinner===0?1:0] ?? 0} rounds
                     </div>
                   </>
                 ) : (
@@ -1412,7 +1426,7 @@ export default function HitForHit() {
                 {/* Scorecard */}
                 <div className="card" style={{padding:"1rem",marginBottom:"1.5rem",textAlign:"left"}}>
                   <div className="hd" style={{fontSize:13,letterSpacing:".08em",color:MUTED2,marginBottom:8}}>SCORECARD</div>
-                  {toArray(gs.roundHistory).map((r,i)=>(
+                  {roundHistory.map((r,i)=>(
                     <div key={i} className="hrow bf" style={{fontSize:12}}>
                       <span style={{color:MUTED3}}>R{r.round}</span>
                       <span style={{color:C,maxWidth:95,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.song1}</span>
