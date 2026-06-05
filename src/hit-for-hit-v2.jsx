@@ -109,19 +109,39 @@ function getJudgeBallotId(code) {
   }
 }
 
-/** Normalize older saved games + ensure members / hostName exist. */
+/** Firebase RTDB stores arrays as { "0": …, "1": … }; coerce back to arrays. */
+function toArray(val) {
+  if (Array.isArray(val)) return val;
+  if (val && typeof val === "object") {
+    return Object.keys(val)
+      .filter((k) => /^\d+$/.test(k))
+      .sort((a, b) => Number(a) - Number(b))
+      .map((k) => val[k]);
+  }
+  return [];
+}
+
+/** Normalize older saved games + Firebase list shapes. */
 function normalizeGameState(g) {
   if (!g) return g;
   const hostName = g.hostName || g.player1 || "";
-  let members = Array.isArray(g.members) ? [...g.members] : [];
+  let members = toArray(g.members);
   if (members.length === 0) {
     members = [
       ...new Set(
-        [hostName, g.player2, ...(g.judges || [])].filter(Boolean)
+        [hostName, g.player2, ...toArray(g.judges)].filter(Boolean)
       ),
     ];
   }
-  return { ...g, hostName, members };
+  const scores = toArray(g.scores);
+  return {
+    ...g,
+    hostName,
+    members,
+    judges: toArray(g.judges),
+    scores: scores.length >= 2 ? scores : [scores[0] ?? 0, scores[1] ?? 0],
+    roundHistory: toArray(g.roundHistory),
+  };
 }
 
 function countAnonymousVotes(votes) {
@@ -562,7 +582,7 @@ export default function HitForHit() {
 
   // ── CAST VOTE (judges only, anonymous ballot id) ────────────────────────
   const castVote = async (playerIdx) => {
-    if (!gs || !gs.judges?.includes(myName)) return;
+    if (!gs || !toArray(gs.judges).includes(myName)) return;
     const votes = gs.judgeVotes || {};
     const ballotId = getJudgeBallotId(gs.code);
     if (votes[ballotId] !== undefined) { showToast("You already voted!"); return; }
@@ -578,7 +598,7 @@ export default function HitForHit() {
   const finalizeRound = async () => {
     if (!gs) return;
     const votes = gs.judgeVotes || {};
-    const judgeNames = gs.judges;
+    const judgeNames = toArray(gs.judges);
     const keys = Object.keys(votes);
     const looksBallot =
       keys.length > 0 &&
@@ -595,7 +615,7 @@ export default function HitForHit() {
     }
     const winner = v1 > v2 ? 0 : v2 > v1 ? 1 : (Math.random() < 0.5 ? 0 : 1);
 
-    const newScores = [...gs.scores];
+    const newScores = [...toArray(gs.scores)];
     newScores[winner]++;
     const historyEntry = {
       round: gs.currentRound,
@@ -608,7 +628,7 @@ export default function HitForHit() {
         phase: PHASES.RESULT,
         roundWinner: winner,
         scores: newScores,
-        roundHistory: [...gs.roundHistory, historyEntry],
+        roundHistory: [...toArray(gs.roundHistory), historyEntry],
       });
     } catch {
       showToast("Failed to finalize round — try again");
@@ -683,11 +703,11 @@ export default function HitForHit() {
     (myRole === "host" && Boolean(gs) && myName === gs.player1 && !gs.hostName);
   const isPlayer1 = Boolean(gs && myName && myName === gs.player1);
   const isPlayer2 = Boolean(gs && myName && myName === gs.player2);
-  const isJudge   = Boolean(gs && myName && gs.judges?.includes(myName));
+  const isJudge   = Boolean(gs && myName && toArray(gs.judges).includes(myName));
   const isPlayer  = isPlayer1 || isPlayer2;
 
   const votes       = gs?.judgeVotes || {};
-  const judgeNames  = gs?.judges || [];
+  const judgeNames  = gs ? toArray(gs.judges) : [];
   const ballotId    = gs?.code ? getJudgeBallotId(gs.code) : "";
   const voteKeys    = Object.keys(votes);
   const looksBallot =
@@ -1213,10 +1233,10 @@ export default function HitForHit() {
                 )}
 
                 {/* Round history */}
-                {gs.roundHistory.length>0&&(
+                {(toArray(gs.roundHistory).length > 0) && (
                   <div style={{marginTop:"1.5rem"}}>
                     <div className="hd" style={{fontSize:13,letterSpacing:".08em",color:MUTED3,marginBottom:6}}>PREVIOUS ROUNDS</div>
-                    {gs.roundHistory.map((r,i)=>(
+                    {toArray(gs.roundHistory).map((r,i)=>(
                       <div key={i} className="hrow bf" style={{fontSize:12}}>
                         <span style={{color:MUTED3}}>R{r.round}</span>
                         <span style={{color:C,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.song1}</span>
@@ -1392,7 +1412,7 @@ export default function HitForHit() {
                 {/* Scorecard */}
                 <div className="card" style={{padding:"1rem",marginBottom:"1.5rem",textAlign:"left"}}>
                   <div className="hd" style={{fontSize:13,letterSpacing:".08em",color:MUTED2,marginBottom:8}}>SCORECARD</div>
-                  {gs.roundHistory.map((r,i)=>(
+                  {toArray(gs.roundHistory).map((r,i)=>(
                     <div key={i} className="hrow bf" style={{fontSize:12}}>
                       <span style={{color:MUTED3}}>R{r.round}</span>
                       <span style={{color:C,maxWidth:95,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.song1}</span>

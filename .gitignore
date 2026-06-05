@@ -21,6 +21,7 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
@@ -29,8 +30,8 @@ dist-ssr
 
 
 # .gitignore
-node_modules/
-.env
-.env.local
-build/
-dist/
+#node_modules/
+#.env
+#.env.local
+#build/
+#dist/
