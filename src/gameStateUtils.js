@@ -46,6 +46,6 @@ export function normalizeGameState(g) {
   }
 }
 
-export function displayName(name, fallback = "Player") {
+export function playerLabel(name, fallback = "Player") {
   return (name && String(name).trim()) || fallback;
 }

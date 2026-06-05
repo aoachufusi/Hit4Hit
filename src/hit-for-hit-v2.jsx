@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   normalizeGameState,
   toArray,
-  displayName,
+  playerLabel,
 } from "./gameStateUtils.js";
 import {
   createGame as firebaseCreateGame,
@@ -687,6 +687,11 @@ export default function HitForHit() {
   const isJudge   = Boolean(gs && myName && toArray(gs.judges).includes(myName));
   const isPlayer  = isPlayer1 || isPlayer2;
 
+  const members = gs ? toArray(gs.members) : [];
+  const judges = gs ? toArray(gs.judges) : [];
+  const roundHistory = gs ? toArray(gs.roundHistory) : [];
+  const scores = gs ? toArray(gs.scores) : [0, 0];
+
   const votes       = gs?.judgeVotes || {};
   const judgeNames  = gs ? toArray(gs.judges) : [];
   const ballotId    = gs?.code ? getJudgeBallotId(gs.code) : "";
@@ -707,13 +712,9 @@ export default function HitForHit() {
   const gameWinner  = !gs ? -1 : (scores[0] ?? 0) > (scores[1] ?? 0) ? 0 : (scores[1] ?? 0) > (scores[0] ?? 0) ? 1 : -1;
   const gameLoser   = gameWinner === 0 ? 1 : gameWinner === 1 ? 0 : -1;
 
-  const p1name = displayName(gs?.player1, "Player 1");
-  const p2name = displayName(gs?.player2, "Player 2");
+  const p1name = playerLabel(gs?.player1, "Player 1");
+  const p2name = playerLabel(gs?.player2, "Player 2");
   const players = [p1name, p2name];
-  const members = gs ? toArray(gs.members) : [];
-  const judges = gs ? toArray(gs.judges) : [];
-  const roundHistory = gs ? toArray(gs.roundHistory) : [];
-  const scores = gs ? toArray(gs.scores) : [0, 0];
 
   // ── STYLES ────────────────────────────────────────────────────────────────
   const css = `
@@ -1169,7 +1170,7 @@ export default function HitForHit() {
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                         <MicIcon/>
                         <span className="hd" style={{color:COLORS[isPlayer1?0:1],fontSize:14,letterSpacing:".05em"}}>
-                          {(isPlayer1?displayName(gs.player1):displayName(gs.player2)).toUpperCase()}
+                          {(isPlayer1?playerLabel(gs.player1):playerLabel(gs.player2)).toUpperCase()}
                         </span>
                         <span className="bf" style={{color:MUTED2,fontSize:11}}>({isPlayer1?gs.artist1:gs.artist2})</span>
                         <span className="bf" style={{color:MUTED3,fontSize:10}}>(you)</span>
@@ -1204,7 +1205,7 @@ export default function HitForHit() {
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
                         <MicIcon/>
                         <span className="hd" style={{color:COLORS[isPlayer1?1:0],fontSize:14}}>
-                          {(isPlayer1?displayName(gs.player2):displayName(gs.player1)).toUpperCase()}
+                          {(isPlayer1?playerLabel(gs.player2):playerLabel(gs.player1)).toUpperCase()}
                         </span>
                         <span className="bf" style={{color:MUTED2,fontSize:11}}>({isPlayer1?gs.artist2:gs.artist1})</span>
                       </div>
