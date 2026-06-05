@@ -96,6 +96,12 @@ function generateCode() {
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
+function getInviteUrl(code) {
+  const url = new URL(window.location.origin);
+  url.searchParams.set("join", code);
+  return url.toString();
+}
+
 // Game state synced via Firebase Realtime Database (games/{code})
 
 function getJudgeBallotId(code) {
@@ -289,6 +295,23 @@ export default function HitForHit() {
     return () => {
       if (unsubRef.current) unsubRef.current();
     };
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("join")?.trim().toUpperCase();
+    if (!code || code.length !== 6) return;
+
+    setJoinCode(code);
+    setScreen("join");
+
+    params.delete("join");
+    const next = params.toString();
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${next ? `?${next}` : ""}`
+    );
   }, []);
 
   // Auto-advance screen when game phase changes
@@ -655,9 +678,15 @@ export default function HitForHit() {
   };
 
   const shareInvite = () => {
-    const text = `🎤 Join my Hit 4 Hit game! Code: ${gs?.code}\nOpen the app → Join with Code → enter ${gs?.code}`;
-    if (navigator.share) navigator.share({ title: "Hit 4 Hit", text }).catch(() => {});
-    else { navigator.clipboard?.writeText(text).catch(() => {}); showToast("Invite copied!"); }
+    if (!gs?.code) return;
+    const url = getInviteUrl(gs.code);
+    const text = `🎤 Join my Hit 4 Hit game! Code: ${gs.code}\n${url}`;
+    if (navigator.share) {
+      navigator.share({ title: "Hit 4 Hit", text, url }).catch(() => {});
+    } else {
+      navigator.clipboard?.writeText(text).catch(() => {});
+      showToast("Invite link copied!");
+    }
   };
 
   const resetAll = async () => {
@@ -952,7 +981,7 @@ export default function HitForHit() {
 
             {/* Code card */}
             <div style={{background:SURFACE2,border:`2px dashed ${BORDER2}`,borderRadius:12,padding:"1.25rem",textAlign:"center",marginBottom:"1.25rem"}}>
-              <div className="bf" style={{color:MUTED2,fontSize:11,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>Share this code</div>
+              <div className="bf" style={{color:MUTED2,fontSize:11,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>Share invite link or code</div>
               <div className="hd" style={{fontSize:56,letterSpacing:".18em",color:C,marginBottom:12}}>{gs.code}</div>
               <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
                 <button className="btn-ghost" onClick={copyCode}>{copied?<><CheckIcon/> Copied!</>:<><CopyIcon/> Copy code</>}</button>
