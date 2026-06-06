@@ -3,6 +3,10 @@ import {
   normalizeGameState,
   toArray,
   playerLabel,
+  getActiveJudges,
+  isGameJudge,
+  computeRoundPoints,
+  roundPointsLabel,
 } from "./gameStateUtils.js";
 import {
   createGame as firebaseCreateGame,
@@ -14,7 +18,7 @@ import {
 } from "./firebase/gameService.js";
 import { isFirebaseConfigured } from "./firebase/config.js";
 import { useSpotify } from "./useSpotify.js";
-import SpotifySongPicker from "./SpotifySongPicker.jsx";
+import SongSearch from "./musickit/SongSearch.jsx";
 import { getInviteUrl } from "./appUrl.js";
 import { getStoredSession } from "./spotifyAuth.js";
 import {
@@ -28,13 +32,19 @@ import {
   loadMyMusicProvider,
   saveMyMusicProvider,
 } from "./musicConstants.js";
+import {
+  buildTrackMeta,
+  resolveTrackForPlayback,
+  playRoundTrack,
+  stopRoundPlayback,
+  waitForPlaybackEnd,
+} from "./roundPlayback.js";
 import ArtistSearch from "./musickit/ArtistSearch.jsx";
 import MusicProviderPicker from "./musickit/MusicProviderPicker.jsx";
 import {
   authorizeHost,
   configureMusicKit,
   getDeveloperToken,
-  searchTracks as searchAppleTracks,
   unauthorizeHost,
 } from "./musickit/musickitService.js";
 
@@ -71,6 +81,7 @@ const ROUND_PUNISHMENTS = [
 const PHASES = {
   LOBBY:   "lobby",
   PLAYING: "playing",
+  LISTENING: "listening",
   JUDGING: "judging",
   RESULT:  "result",
   FINAL:   "final",
@@ -204,6 +215,7 @@ export default function HitForHit() {
 
   // ── Per-player song input (local only, submitted to DB on confirm)
   const [mySong, setMySong]     = useState("");
+  const [myTrackMeta, setMyTrackMeta] = useState(null);
   const [songSubmitted, setSongSubmitted] = useState(false);
 
   const unsubRef = useRef(null);
@@ -273,6 +285,7 @@ export default function HitForHit() {
       queueMicrotask(() => {
         setSongSubmitted(false);
         setMySong("");
+        setMyTrackMeta(null);
       });
     }
   }, [gs?.phase, gs?.currentRound]);
@@ -468,6 +481,15 @@ export default function HitForHit() {
     }
   };
 
+  // ── Role helpers (needed before song submit / playback handlers) ─────────
+  const isHost =
+    Boolean(gs && myName && myName === gs.hostName) ||
+    (myRole === "host" && Boolean(gs) && myName === gs.player1 && !gs.hostName);
+  const isPlayer1 = Boolean(gs && myName && myName === gs.player1);
+  const isPlayer2 = Boolean(gs && myName && myName === gs.player2);
+  const isJudge   = Boolean(gs && myName && isGameJudge(gs, myName));
+  const isPlayer  = isPlayer1 || isPlayer2;
+
   // ── START GAME (host only) ───────────────────────────────────────────────
   const startGame = async () => {
     if (!gs?.player1 || !gs?.player2 || !gs.artist1 || !gs.artist2) return;
@@ -483,8 +505,8 @@ export default function HitForHit() {
     if (!mySong.trim() || !gs) return;
     const isP1 = myName === gs.player1;
     const patch = isP1
-      ? { song1: mySong.trim(), p1Ready: true }
-      : { song2: mySong.trim(), p2Ready: true };
+      ? { song1: mySong.trim(), p1Ready: true, song1Meta: myTrackMeta || null }
+      : { song2: mySong.trim(), p2Ready: true, song2Meta: myTrackMeta || null };
 
     setSongSubmitted(true);
     const merged = { ...gs, ...patch };
@@ -496,43 +518,68 @@ export default function HitForHit() {
       return;
     }
 
-    // If both ready, host triggers judging phase
-    if (merged.p1Ready && merged.p2Ready && myName === gs.hostName) {
+    if (merged.p1Ready && merged.p2Ready && isHost) {
       const punishment = getRandom(ROUND_PUNISHMENTS);
       try {
         await updateGame(gs.code, {
-          phase: PHASES.JUDGING,
+          phase: PHASES.LISTENING,
+          playbackIndex: 0,
           judgeVotes: {},
           roundPunishment: punishment,
         });
       } catch {
-        showToast("Failed to start judging — try again");
+        showToast("Failed to start playback — try again");
       }
     }
   };
 
-  // Auto-advance to judging when both songs in (non-host poll picks this up)
+  const advancePlayback = useCallback(async () => {
+    if (!gs?.code || !isHost || gs.phase !== PHASES.LISTENING) return;
+    const idx = gs.playbackIndex ?? 0;
+    const next = idx + 1;
+    try {
+      if (next >= 2) {
+        await updateGame(gs.code, { phase: PHASES.JUDGING, playbackIndex: 2 });
+      } else {
+        await updateGame(gs.code, { playbackIndex: next });
+      }
+    } catch {
+      showToast("Failed to advance playback — try again");
+    }
+  }, [gs?.code, gs?.phase, gs?.playbackIndex, isHost, showToast]);
+
+  const openVoting = useCallback(async () => {
+    if (!gs?.code || !isHost || gs.phase !== PHASES.LISTENING) return;
+    try {
+      await updateGame(gs.code, { phase: PHASES.JUDGING, playbackIndex: 2 });
+    } catch {
+      showToast("Failed to open voting — try again");
+    }
+  }, [gs?.code, gs?.phase, isHost, showToast]);
+
+  // Auto-advance to listening when both songs in (non-host poll picks this up)
   useEffect(() => {
-    if (!gs || myName !== gs.hostName || gs.phase !== PHASES.PLAYING) return;
+    if (!gs || !isHost || gs.phase !== PHASES.PLAYING) return;
     if (gs.p1Ready && gs.p2Ready && gs.song1 && gs.song2) {
       (async () => {
         const punishment = getRandom(ROUND_PUNISHMENTS);
         try {
           await updateGame(gs.code, {
-            phase: PHASES.JUDGING,
+            phase: PHASES.LISTENING,
+            playbackIndex: 0,
             judgeVotes: {},
             roundPunishment: punishment,
           });
         } catch {
-          showToast("Failed to start judging — try again");
+          showToast("Failed to start playback — try again");
         }
       })();
     }
-  }, [gs?.p1Ready, gs?.p2Ready, gs?.hostName, gs?.phase, myName]);
+  }, [gs?.p1Ready, gs?.p2Ready, gs?.phase, gs?.song1, gs?.song2, isHost, showToast]);
 
   // ── CAST VOTE (judges only, anonymous ballot id) ────────────────────────
   const castVote = async (playerIdx) => {
-    if (!gs || !toArray(gs.judges).includes(myName)) return;
+    if (!gs || !isGameJudge(gs, myName)) return;
     const votes = gs.judgeVotes || {};
     const ballotId = getJudgeBallotId(gs.code);
     if (votes[ballotId] !== undefined) { showToast("You already voted!"); return; }
@@ -548,7 +595,7 @@ export default function HitForHit() {
   const finalizeRound = async () => {
     if (!gs) return;
     const votes = gs.judgeVotes || {};
-    const judgeNames = toArray(gs.judges);
+    const judgeNames = getActiveJudges(gs);
     const keys = Object.keys(votes);
     const looksBallot =
       keys.length > 0 &&
@@ -563,14 +610,20 @@ export default function HitForHit() {
       v1 = judgeNames.filter((j) => votes[j] === 0).length;
       v2 = judgeNames.filter((j) => votes[j] === 1).length;
     }
-    const winner = v1 > v2 ? 0 : v2 > v1 ? 1 : (Math.random() < 0.5 ? 0 : 1);
+    const { points, winner, tied } = computeRoundPoints(v1, v2);
 
     const newScores = [...toArray(gs.scores)];
-    newScores[winner]++;
+    newScores[0] = (newScores[0] ?? 0) + points[0];
+    newScores[1] = (newScores[1] ?? 0) + points[1];
     const historyEntry = {
       round: gs.currentRound,
-      song1: gs.song1, song2: gs.song2,
-      winner, v1, v2,
+      song1: gs.song1,
+      song2: gs.song2,
+      winner,
+      tied,
+      points,
+      v1,
+      v2,
     };
 
     try {
@@ -605,7 +658,9 @@ export default function HitForHit() {
           phase: PHASES.PLAYING,
           currentRound: gs.currentRound + 1,
           song1: "", song2: "",
+          song1Meta: null, song2Meta: null,
           p1Ready: false, p2Ready: false,
+          playbackIndex: 0,
           judgeVotes: {},
           roundWinner: null,
         });
@@ -646,6 +701,7 @@ export default function HitForHit() {
       }
     }
     setGs(null); setMyRole(null); setMyName(""); setMySong("");
+    setMyTrackMeta(null);
     setSongSubmitted(false);
     setPlayer1Name("");
     setJoinCode(""); setJoinError("");
@@ -654,14 +710,6 @@ export default function HitForHit() {
   };
 
   // ── Derived state ─────────────────────────────────────────────────────────
-  const isHost =
-    Boolean(gs && myName && myName === gs.hostName) ||
-    (myRole === "host" && Boolean(gs) && myName === gs.player1 && !gs.hostName);
-  const isPlayer1 = Boolean(gs && myName && myName === gs.player1);
-  const isPlayer2 = Boolean(gs && myName && myName === gs.player2);
-  const isJudge   = Boolean(gs && myName && toArray(gs.judges).includes(myName));
-  const isPlayer  = isPlayer1 || isPlayer2;
-
   const setMyMusicProviderPersist = useCallback((provider) => {
     saveMyMusicProvider(provider);
     setMyMusicProvider(provider);
@@ -762,17 +810,99 @@ export default function HitForHit() {
     [getSpotifySearchToken]
   );
 
-  const sharedSearchTracks = useCallback(
-    async (q, limit, opts) => {
-      if (iUseAppleMusic) {
-        const tracks = await searchAppleTracks(q, opts?.artistName);
-        return tracks.slice(0, limit || 8);
-      }
+  const searchSpotifyTracks = useCallback(
+    async (q, artistName) => {
       const token = await getSpotifySearchToken();
-      return searchTracksWithToken(token, q, limit, opts);
+      return searchTracksWithToken(token, q, 8, { artistName });
     },
-    [iUseAppleMusic, getSpotifySearchToken]
+    [getSpotifySearchToken]
   );
+
+  const playbackEpochRef = useRef(0);
+
+  useEffect(() => {
+    if (gs?.phase !== PHASES.LISTENING) {
+      stopRoundPlayback();
+      return;
+    }
+
+    const index = gs.playbackIndex ?? 0;
+    if (index >= 2) {
+      if (isHost) advancePlayback();
+      return;
+    }
+
+    let cancelled = false;
+    const epoch = ++playbackEpochRef.current;
+    let cleanupWait = () => {};
+
+    (async () => {
+      const meta = index === 0 ? gs.song1Meta : gs.song2Meta;
+      const label = index === 0 ? gs.song1 : gs.song2;
+      const artist = index === 0 ? gs.artist1 : gs.artist2;
+
+      if (!isHost) return;
+
+      const resolved = await resolveTrackForPlayback(meta, label, artist, {
+        iUseAppleMusic,
+        searchSpotifyTracks,
+      });
+      if (cancelled || playbackEpochRef.current !== epoch) return;
+
+      try {
+        const result = await playRoundTrack(resolved, {
+          playSpotifyUri:
+            !iUseAppleMusic && spotify.loggedIn && spotify.deviceId
+              ? spotify.playUri
+              : null,
+        });
+        if (cancelled || playbackEpochRef.current !== epoch) return;
+
+        if (isHost) {
+          cleanupWait = waitForPlaybackEnd(result, () => {
+            if (!cancelled && playbackEpochRef.current === epoch) {
+              advancePlayback();
+            }
+          });
+        }
+      } catch (e) {
+        console.error("Round playback failed", e);
+        if (isHost && !cancelled) {
+          cleanupWait = waitForPlaybackEnd(null, advancePlayback);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      cleanupWait();
+      stopRoundPlayback();
+    };
+  }, [
+    gs?.phase,
+    gs?.playbackIndex,
+    gs?.song1,
+    gs?.song2,
+    gs?.song1Meta,
+    gs?.song2Meta,
+    gs?.artist1,
+    gs?.artist2,
+    isHost,
+    myName,
+    iUseAppleMusic,
+    searchSpotifyTracks,
+    spotify.loggedIn,
+    spotify.deviceId,
+    spotify.playUri,
+    advancePlayback,
+  ]);
+
+  // Safety net: host auto-advances if playback stalls
+  useEffect(() => {
+    if (!isHost || gs?.phase !== PHASES.LISTENING) return;
+    const timer = setTimeout(() => advancePlayback(), 45_000);
+    return () => clearTimeout(timer);
+  }, [isHost, gs?.phase, gs?.playbackIndex, advancePlayback]);
 
   const hostSpotifyLogout = useCallback(async () => {
     spotify.logout();
@@ -820,12 +950,12 @@ export default function HitForHit() {
   }, [isHost, gs?.code, spotify.loggedIn, spotify]);
 
   const members = gs ? toArray(gs.members) : [];
-  const judges = gs ? toArray(gs.judges) : [];
+  const judges = gs ? getActiveJudges(gs) : [];
   const roundHistory = gs ? toArray(gs.roundHistory) : [];
   const scores = gs ? toArray(gs.scores) : [0, 0];
 
   const votes       = gs?.judgeVotes || {};
-  const judgeNames  = gs ? toArray(gs.judges) : [];
+  const judgeNames  = gs ? getActiveJudges(gs) : [];
   const ballotId    = gs?.code ? getJudgeBallotId(gs.code) : "";
   const voteKeys    = Object.keys(votes);
   const looksBallot =
@@ -1299,25 +1429,58 @@ export default function HitForHit() {
         {/* ════════════════════════ GAME ════════════════════════ */}
         {screen==="game" && gs && (
           <>
-            {/* Score header */}
+            {/* Scoreboard — visible throughout the game until final */}
             {gs.phase!==PHASES.FINAL && (
-              <>
-                <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:8,alignItems:"center",marginBottom:8}}>
+              <div className="card" style={{padding:"1rem 1.25rem",marginBottom:"1.25rem"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <div className="hd" style={{fontSize:13,letterSpacing:".08em",color:MUTED2}}>SCOREBOARD</div>
+                  <span className="bf" style={{fontSize:10,color:MUTED3}}>
+                    Split +1 each · Majority +2 / +0
+                  </span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:8,alignItems:"center",marginBottom:10}}>
                   {[0,1].map(i=>(
                     <div key={i} style={{textAlign:i===0?"left":"right"}}>
                       <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[i]}}>{players[i].toUpperCase()}</div>
                       <div className="bf" style={{color:MUTED3,fontSize:10}}>{i===0?gs.artist1:gs.artist2}</div>
-                      <div className="hd" style={{fontSize:36,color:COLORS[i],lineHeight:1}}>{scores[i] ?? 0}</div>
+                      <div className="hd" style={{fontSize:40,color:COLORS[i],lineHeight:1}}>{scores[i] ?? 0}</div>
                     </div>
                   ))}
-                  <div className="hd" style={{color:MUTED3,fontSize:18,textAlign:"center"}}>VS</div>
+                  <div className="hd" style={{color:MUTED3,fontSize:16,textAlign:"center"}}>VS</div>
                 </div>
-                <div style={{display:"flex",gap:3,height:4,borderRadius:2,overflow:"hidden",marginBottom:"1.5rem"}}>
-                  <div style={{background:C,width:`${((scores[0] ?? 0)/gs.rounds)*100}%`,transition:"width .5s"}}/>
-                  <div style={{flex:1,background:SURFACE2}}/>
-                  <div style={{background:C2,width:`${((scores[1] ?? 0)/gs.rounds)*100}%`,transition:"width .5s"}}/>
-                </div>
-              </>
+                {(() => {
+                  const s0 = scores[0] ?? 0;
+                  const total = s0 + (scores[1] ?? 0);
+                  const p0 = total > 0 ? (s0 / total) * 100 : 50;
+                  return (
+                    <div style={{display:"flex",gap:3,height:6,borderRadius:3,overflow:"hidden",marginBottom:roundHistory.length > 0 ? 12 : 0}}>
+                      <div style={{background:C,width:`${p0}%`,transition:"width .5s"}}/>
+                      <div style={{background:C2,width:`${100 - p0}%`,transition:"width .5s"}}/>
+                    </div>
+                  );
+                })()}
+                {roundHistory.length > 0 && (
+                  <div>
+                    <div className="bf" style={{fontSize:10,color:MUTED3,letterSpacing:".06em",textTransform:"uppercase",marginBottom:6}}>
+                      Round results
+                    </div>
+                    {roundHistory.map((r,i)=>(
+                      <div key={i} className="hrow bf" style={{fontSize:11,marginBottom:4}}>
+                        <span style={{color:MUTED3,minWidth:22}}>R{r.round}</span>
+                        <span style={{color:C,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.song1}</span>
+                        <span style={{color:MUTED3,fontSize:9}}>vs</span>
+                        <span style={{color:C2,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"right"}}>{r.song2}</span>
+                        {r.tied || r.winner == null ? (
+                          <span className="tag" style={{background:SURFACE2,color:MUTED1,border:`1px solid ${BORDER}`}}>TIE</span>
+                        ) : (
+                          <span className="tag" style={{background:COLORS_DIM[r.winner],color:COLORS[r.winner]}}>{players[r.winner]}</span>
+                        )}
+                        <span className="bf" style={{color:MUTED2,fontSize:10,minWidth:52,textAlign:"right"}}>{roundPointsLabel(r)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
 
             {/* ── PLAYING ── */}
@@ -1341,26 +1504,37 @@ export default function HitForHit() {
                       </div>
                       {!songSubmitted ? (
                         <>
-                          <input className="inp" placeholder={`Best ${isPlayer1?gs.artist1:gs.artist2} hit…`}
-                            value={mySong} onChange={e=>setMySong(e.target.value)}
-                            onKeyDown={e=>e.key==="Enter"&&mySong.trim()&&submitSong()}/>
+                          <SongSearch
+                            value={mySong}
+                            onChange={(val) => {
+                              setMySong(val);
+                              setMyTrackMeta(null);
+                            }}
+                            onSelectTrack={(track) =>
+                              setMyTrackMeta(
+                                buildTrackMeta(
+                                  track,
+                                  iUseAppleMusic
+                                    ? MUSIC_PROVIDERS.APPLE
+                                    : MUSIC_PROVIDERS.SPOTIFY
+                                )
+                              )
+                            }
+                            disabled={songSubmitted}
+                            searchReady={musicSearchReady}
+                            usesAppleMusic={iUseAppleMusic}
+                            musicKitReady={musicKitReady}
+                            musicLabel={myMusicLabel}
+                            roundArtist={isPlayer1 ? gs.artist1 : gs.artist2}
+                            searchSpotifyTracks={searchSpotifyTracks}
+                            onToast={showToast}
+                            onEnter={submitSong}
+                            placeholder={`Best ${isPlayer1 ? gs.artist1 : gs.artist2} hit…`}
+                          />
                           <button className="btn" disabled={!mySong.trim()} onClick={submitSong}
                             style={{background:mySong.trim()?COLORS[isPlayer1?0:1]:SURFACE,color:mySong.trim()?"#0D0A14":MUTED2,marginTop:8,fontSize:16}}>
                             LOCK IT IN ✓
                           </button>
-                          <SpotifySongPicker
-                            setMySong={setMySong}
-                            accent={COLORS[isPlayer1 ? 0 : 1]}
-                            disabled={songSubmitted}
-                            onToast={showToast}
-                            roundArtist={isPlayer1 ? gs.artist1 : gs.artist2}
-                            searchEnabled={musicSearchReady}
-                            searchTracks={sharedSearchTracks}
-                            canPlay={!iUseAppleMusic && isHost && Boolean(spotify.deviceId)}
-                            playUri={spotify.playUri}
-                            playerStatus={!iUseAppleMusic && isHost ? spotify.playerStatus : ""}
-                            providerLabel={myMusicLabel}
-                          />
                         </>
                       ) : (
                         <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -1418,18 +1592,87 @@ export default function HitForHit() {
                   </div>
                 )}
 
-                {roundHistory.length > 0 && (
-                  <div style={{marginTop:"1.5rem"}}>
-                    <div className="hd" style={{fontSize:13,letterSpacing:".08em",color:MUTED3,marginBottom:6}}>PREVIOUS ROUNDS</div>
-                    {roundHistory.map((r,i)=>(
-                      <div key={i} className="hrow bf" style={{fontSize:12}}>
-                        <span style={{color:MUTED3}}>R{r.round}</span>
-                        <span style={{color:C,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.song1}</span>
-                        <span style={{color:MUTED3,fontSize:10}}>vs</span>
-                        <span style={{color:C2,maxWidth:100,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.song2}</span>
-                        <span className="tag" style={{background:COLORS_DIM[r.winner],color:COLORS[r.winner]}}>{players[r.winner]}</span>
+              </div>
+            )}
+
+            {/* ── LISTENING ── */}
+            {gs.phase===PHASES.LISTENING && (
+              <div className="slide-up">
+                <div style={{textAlign:"center",marginBottom:"1.25rem"}}>
+                  <div className="hd" style={{fontSize:28,letterSpacing:".06em",marginBottom:4}}>LISTEN UP 🎧</div>
+                  <div className="bf" style={{color:MUTED1,fontSize:13}}>
+                    Both songs play before judges vote
+                  </div>
+                  <div className="bf" style={{color:MUTED3,fontSize:12,marginTop:8}}>
+                    {(gs.playbackIndex ?? 0) === 0
+                      ? `Now playing: ${players[0]}'s pick`
+                      : (gs.playbackIndex ?? 0) === 1
+                        ? `Now playing: ${players[1]}'s pick`
+                        : "Get ready to vote…"}
+                  </div>
+                </div>
+
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:"1.25rem"}}>
+                  {[0,1].map(i=>{
+                    const playing = (gs.playbackIndex ?? 0) === i;
+                    const done = (gs.playbackIndex ?? 0) > i;
+                    return (
+                      <div key={i} style={{
+                        background: playing ? COLORS_DIM[i] : SURFACE2,
+                        border:`2px solid ${playing ? COLORS[i] : done ? COLORS[i] + "44" : BORDER}`,
+                        borderRadius:12,padding:"1rem",textAlign:"center",
+                        opacity: done && !playing ? 0.75 : 1,
+                      }}>
+                        <div className="bf" style={{color:MUTED2,fontSize:10,letterSpacing:".06em",marginBottom:4,textTransform:"uppercase"}}>
+                          {i===0?gs.artist1:gs.artist2}
+                        </div>
+                        <div className="hd" style={{color:COLORS[i],fontSize:16,letterSpacing:".04em",lineHeight:1.25}}>
+                          {i===0?gs.song1:gs.song2}
+                        </div>
+                        <div className="bf" style={{color:MUTED2,fontSize:11,marginTop:4}}>{players[i]}</div>
+                        {playing && (
+                          <div className="pulse bf" style={{color:COLORS[i],fontSize:11,marginTop:8}}>
+                            ▶ Now playing
+                          </div>
+                        )}
+                        {done && !playing && (
+                          <div className="bf" style={{color:"#4ade80",fontSize:11,marginTop:8}}>✓ Played</div>
+                        )}
                       </div>
-                    ))}
+                    );
+                  })}
+                </div>
+
+                {isHost && (
+                  <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:8}}>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      style={{width:"100%",justifyContent:"center"}}
+                      onClick={() => advancePlayback()}
+                    >
+                      Skip to {(gs.playbackIndex ?? 0) >= 1 ? "voting" : "next song"} →
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{width:"100%",background:C,color:"#fff",fontSize:15}}
+                      onClick={() => openVoting()}
+                    >
+                      Open voting now
+                    </button>
+                  </div>
+                )}
+
+                {isJudge && (
+                  <div className="bf" style={{textAlign:"center",color:MUTED2,fontSize:13,padding:"0.5rem 0 1rem"}}>
+                    Voting opens after both songs finish…
+                  </div>
+                )}
+
+                {isPlayer && (
+                  <div className="bf" style={{textAlign:"center",color:MUTED2,fontSize:13,padding:"0.5rem 0 1rem"}}>
+                    Sit tight — everyone is listening to your picks…
                   </div>
                 )}
               </div>
@@ -1476,6 +1719,12 @@ export default function HitForHit() {
                   </>
                 )}
 
+                {!isJudge && !isPlayer && votesTotal === 0 && (
+                  <div className="bf" style={{textAlign:"center",color:MUTED3,fontSize:13,padding:"1rem",lineHeight:1.5}}>
+                    No judges in this room — you need at least one person who isn&apos;t a music player to vote.
+                  </div>
+                )}
+
                 {isJudge && myHasVoted && (
                   <div className="bf" style={{textAlign:"center",color:"#4ade80",fontSize:13,padding:"1rem"}}>
                     ✓ Your vote is in — waiting for others…
@@ -1516,21 +1765,30 @@ export default function HitForHit() {
             {/* ── RESULT ── */}
             {gs.phase===PHASES.RESULT && (
               <div className="slide-up" style={{textAlign:"center"}}>
-                <div className="bf" style={{fontSize:12,letterSpacing:".1em",color:MUTED2,textTransform:"uppercase",marginBottom:4}}>Round {gs.currentRound} Winner</div>
-                <div className="hd" style={{fontSize:54,letterSpacing:".04em",color:COLORS[gs.roundWinner],marginBottom:4}}>
-                  {players[gs.roundWinner].toUpperCase()}
-                </div>
-                <div className="bf" style={{color:MUTED1,fontSize:13,marginBottom:4}}>
-                  with "{gs.roundWinner===0?gs.song1:gs.song2}"
-                </div>
+                {gs.roundWinner == null ? (
+                  <>
+                    <div className="bf" style={{fontSize:12,letterSpacing:".1em",color:MUTED2,textTransform:"uppercase",marginBottom:4}}>Round {gs.currentRound}</div>
+                    <div className="hd" style={{fontSize:48,letterSpacing:".04em",color:MUTED1,marginBottom:4}}>SPLIT VOTE 🤝</div>
+                    <div className="bf" style={{color:MUTED1,fontSize:13,marginBottom:4}}>+1 point each</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="bf" style={{fontSize:12,letterSpacing:".1em",color:MUTED2,textTransform:"uppercase",marginBottom:4}}>Round {gs.currentRound} Winner</div>
+                    <div className="hd" style={{fontSize:54,letterSpacing:".04em",color:COLORS[gs.roundWinner],marginBottom:4}}>
+                      {players[gs.roundWinner].toUpperCase()}
+                    </div>
+                    <div className="bf" style={{color:MUTED1,fontSize:13,marginBottom:4}}>
+                      with "{gs.roundWinner===0?gs.song1:gs.song2}" · +2 points
+                    </div>
+                  </>
+                )}
                 <div className="bf" style={{color:MUTED3,fontSize:12,marginBottom:"1.75rem"}}>
                   {looksBallot
                     ? (() => {
                         const c = countAnonymousVotes(votes);
-                        const w = gs.roundWinner;
-                        return `${w === 0 ? c.v0 : c.v1}–${w === 0 ? c.v1 : c.v0} anonymous votes`;
+                        return `${c.v0}–${c.v1} anonymous votes`;
                       })()
-                    : `${judgeNames.filter((j) => votes[j] === gs.roundWinner).length}–${judgeNames.filter((j) => votes[j] !== gs.roundWinner).length} judges`}
+                    : `${judgeNames.filter((j) => votes[j] === 0).length}–${judgeNames.filter((j) => votes[j] === 1).length} judges`}
                 </div>
 
                 {/* Punishment */}
@@ -1540,17 +1798,23 @@ export default function HitForHit() {
                   </div>
                   <div className="bf" style={{color:TEXT,fontSize:15,lineHeight:1.5}}>{gs.roundPunishment}</div>
                   <div className="bf" style={{color:MUTED2,fontSize:12,marginTop:6}}>
-                    {players[gs.roundWinner===0?1:0]} drinks 👇
+                    {gs.roundWinner == null
+                      ? "Split vote — both players drink 👇"
+                      : `${players[gs.roundWinner===0?1:0]} drinks 👇`}
                   </div>
                 </div>
 
                 {/* Score cards */}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:"1.25rem"}}>
                   {[0,1].map(i=>(
-                    <div key={i} style={{background:gs.roundWinner===i?COLORS_DIM[i]:SURFACE,border:`1px solid ${gs.roundWinner===i?COLORS[i]+"55":BORDER}`,borderRadius:10,padding:"1rem"}}>
+                    <div key={i} style={{
+                      background: gs.roundWinner == null ? COLORS_DIM[i] : gs.roundWinner===i ? COLORS_DIM[i] : SURFACE,
+                      border:`1px solid ${gs.roundWinner == null ? COLORS[i]+"44" : gs.roundWinner===i ? COLORS[i]+"55" : BORDER}`,
+                      borderRadius:10,padding:"1rem",
+                    }}>
                       <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[i],marginBottom:2}}>{players[i].toUpperCase()}</div>
                       <div className="hd" style={{fontSize:42,color:COLORS[i],lineHeight:1}}>{scores[i] ?? 0}</div>
-                      <div className="bf" style={{color:MUTED2,fontSize:11}}>wins</div>
+                      <div className="bf" style={{color:MUTED2,fontSize:11}}>points</div>
                     </div>
                   ))}
                 </div>
@@ -1578,7 +1842,7 @@ export default function HitForHit() {
                     </div>
                     <div className="bf" style={{color:COLORS[gameWinner],fontSize:13,marginBottom:2}}>{(gameWinner===0?gs.artist1:gs.artist2).toUpperCase()} STAN</div>
                     <div className="bf" style={{color:MUTED2,fontSize:12,marginBottom:"2rem"}}>
-                      {scores[gameWinner] ?? 0}–{scores[gameWinner===0?1:0] ?? 0} rounds
+                      {scores[gameWinner] ?? 0}–{scores[gameWinner===0?1:0] ?? 0} points
                     </div>
                   </>
                 ) : (
@@ -1603,8 +1867,12 @@ export default function HitForHit() {
                       <span style={{color:C,maxWidth:95,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.song1}</span>
                       <span style={{color:MUTED3,fontSize:10}}>vs</span>
                       <span style={{color:C2,maxWidth:95,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.song2}</span>
-                      <span className="tag" style={{background:COLORS_DIM[r.winner],color:COLORS[r.winner]}}>{players[r.winner]}</span>
-                      <span className="bf" style={{color:MUTED3,fontSize:10}}>{r.v1}-{r.v2}</span>
+                      {r.tied || r.winner == null ? (
+                        <span className="tag" style={{background:SURFACE2,color:MUTED1}}>TIE</span>
+                      ) : (
+                        <span className="tag" style={{background:COLORS_DIM[r.winner],color:COLORS[r.winner]}}>{players[r.winner]}</span>
+                      )}
+                      <span className="bf" style={{color:MUTED2,fontSize:10}}>{roundPointsLabel(r)}</span>
                     </div>
                   ))}
                 </div>

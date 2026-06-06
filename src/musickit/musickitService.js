@@ -1,4 +1,10 @@
 // ── Fetch developer token from your Vercel serverless function
+import {
+  appleTrackByArtist,
+  normalizeArtistName,
+  pickBestArtistMatch,
+} from "../musicSearchUtils.js";
+
 export async function getDeveloperToken() {
   const res = await fetch("/api/musickit-token");
   const data = await res.json().catch(() => ({}));
@@ -78,25 +84,44 @@ export async function searchArtists(query) {
   })) || [];
 }
 
-// ── Search songs by name (optional artist hint)
+const appleArtistCache = new Map();
+
+export async function findArtistByName(artistName) {
+  const key = normalizeArtistName(artistName);
+  if (!key) return null;
+  if (appleArtistCache.has(key)) return appleArtistCache.get(key);
+
+  const artists = await searchArtists(artistName);
+  const match = pickBestArtistMatch(artists, artistName);
+  if (match) appleArtistCache.set(key, match);
+  return match || null;
+}
+
+// ── Search songs by name — results limited to the given artist
 export async function searchTracks(query, artistName) {
+  const artist = await findArtistByName(artistName);
+  if (!artist) return [];
+
   const music = MusicKit.getInstance();
-  const term = artistName?.trim()
-    ? `${String(query).trim()} ${artistName.trim()}`
-    : String(query).trim();
+  const term = String(query).trim();
   const results = await music.api.music(`/v1/catalog/us/search`, {
-    term,
+    term: `${term} ${artist.name}`,
     types: "songs",
-    limit: 8,
+    limit: 25,
   });
   return (
-    results.data.results.songs?.data.map((t) => ({
-      id: t.id,
-      name: t.attributes.name,
-      uri: t.id,
-      preview: t.attributes.previews?.[0]?.url,
-      artists: [{ name: t.attributes.artistName || "Unknown artist" }],
-    })) || []
+    results.data.results.songs?.data
+      .filter((t) =>
+        appleTrackByArtist(t.attributes.artistName, artist.name)
+      )
+      .slice(0, 8)
+      .map((t) => ({
+        id: t.id,
+        name: t.attributes.name,
+        uri: t.id,
+        preview: t.attributes.previews?.[0]?.url,
+        artists: [{ name: t.attributes.artistName || artist.name }],
+      })) || []
   );
 }
 
