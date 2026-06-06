@@ -1,3 +1,5 @@
+import { isLocalHost } from "./appUrl.js";
+
 const CLIENT_ID = (import.meta.env.VITE_SPOTIFY_CLIENT_ID || "").trim();
 const REDIRECT_URI = (import.meta.env.VITE_SPOTIFY_REDIRECT_URI || "").trim();
 
@@ -18,7 +20,14 @@ export function getRedirectUri() {
     const runtime = `${window.location.origin}/callback`;
     // Dev: always match the running Vite URL (5173 vs 5174, etc.)
     if (import.meta.env.DEV) return runtime;
-    return REDIRECT_URI || runtime;
+    if (REDIRECT_URI) {
+      try {
+        if (!isLocalHost(new URL(REDIRECT_URI).hostname)) return REDIRECT_URI;
+      } catch {
+        /* fall through to runtime */
+      }
+    }
+    return runtime;
   }
   return REDIRECT_URI;
 }

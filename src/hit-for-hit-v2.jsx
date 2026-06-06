@@ -15,6 +15,7 @@ import {
 import { isFirebaseConfigured } from "./firebase/config.js";
 import { useSpotify } from "./useSpotify.js";
 import SpotifySongPicker from "./SpotifySongPicker.jsx";
+import { getInviteUrl } from "./appUrl.js";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 
@@ -96,13 +97,28 @@ function generateCode() {
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
-function getInviteUrl(code) {
-  const url = new URL(window.location.origin);
-  url.searchParams.set("join", code);
-  return url.toString();
+// Game state synced via Firebase Realtime Database (games/{code})
+
+const APP_RESTORE_KEY = "h4h:app_restore";
+
+function saveAppRestore(snapshot) {
+  try {
+    sessionStorage.setItem(APP_RESTORE_KEY, JSON.stringify(snapshot));
+  } catch {
+    /* ignore quota / private mode */
+  }
 }
 
-// Game state synced via Firebase Realtime Database (games/{code})
+function consumeAppRestore() {
+  try {
+    const raw = sessionStorage.getItem(APP_RESTORE_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(APP_RESTORE_KEY);
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 function getJudgeBallotId(code) {
   const k = `h4h:ballot:${code}`;
@@ -313,6 +329,20 @@ export default function HitForHit() {
       `${window.location.pathname}${next ? `?${next}` : ""}`
     );
   }, []);
+
+  // Restore lobby/game after Spotify OAuth (full page reload wipes React state)
+  useEffect(() => {
+    const saved = consumeAppRestore();
+    if (!saved) return;
+
+    if (saved.myName) setMyName(saved.myName);
+    if (saved.myRole) setMyRole(saved.myRole);
+    if (saved.joinCode) setJoinCode(saved.joinCode);
+    if (saved.player1Name) setPlayer1Name(saved.player1Name);
+    if (saved.screen) setScreen(saved.screen);
+
+    if (saved.gameCode) startListening(saved.gameCode);
+  }, [startListening]);
 
   // Auto-advance screen when game phase changes
   useEffect(() => {
@@ -844,6 +874,14 @@ export default function HitForHit() {
                 style={{ padding: "4px 10px", fontSize: 11 }}
                 onClick={async () => {
                   try {
+                    saveAppRestore({
+                      screen,
+                      myName,
+                      myRole,
+                      joinCode,
+                      player1Name,
+                      gameCode: gs?.code || null,
+                    });
                     await spotify.login();
                   } catch (e) {
                     showToast(String(e?.message || e));

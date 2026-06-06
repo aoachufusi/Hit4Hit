@@ -10,9 +10,10 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     appType: 'spa',
     server: {
-      host: '127.0.0.1',
+      // Listen on IPv4 + IPv6 so both http://127.0.0.1:5173 and http://localhost:5173 work
+      host: true,
       port: 5173,
-      strictPort: false,
+      strictPort: true,
       proxy: {
         '/api': {
           target: apiTarget,
