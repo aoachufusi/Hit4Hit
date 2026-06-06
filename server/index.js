@@ -8,8 +8,13 @@
 
 import http from "node:http";
 import { URL } from "node:url";
+import {
+  createAppleMusicDeveloperToken,
+  getAppleMusicConfig,
+} from "./appleMusicToken.js";
+import { sendMusicKitTokenJson } from "./musickitToken.js";
 
-const PORT = Number(process.env.PORT) || 3001;
+const PORT = Number(process.env.PORT) || 3000;
 const KEY_PREFIX = "h4h:";
 
 /** @type {Map<string, string>} code → JSON string */
@@ -103,6 +108,67 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/musickit-token" && req.method === "GET") {
+      sendMusicKitTokenJson(res, sendJson);
+      return;
+    }
+
+    if (url.pathname === "/api/apple-music/developer-token" && req.method === "GET") {
+      if (!getAppleMusicConfig()) {
+        sendJson(res, 503, {
+          error: "Apple Music not configured. Set APPLE_MUSIC_* env vars.",
+        });
+        return;
+      }
+      try {
+        const { developerToken, expiresAt } = createAppleMusicDeveloperToken();
+        res.setHeader("Cache-Control", "private, max-age=1800");
+        sendJson(res, 200, { developerToken, expiresAt });
+      } catch (e) {
+        sendJson(res, 500, { error: String(e?.message || e) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/apple-music/search" && req.method === "GET") {
+      if (!getAppleMusicConfig()) {
+        sendJson(res, 503, {
+          error: "Apple Music not configured. Set APPLE_MUSIC_* env vars.",
+        });
+        return;
+      }
+      const term = String(url.searchParams.get("term") || "").trim();
+      const types = String(url.searchParams.get("types") || "songs").trim();
+      const limit = Math.min(
+        10,
+        Math.max(1, Number(url.searchParams.get("limit")) || 8)
+      );
+      if (!term) {
+        sendJson(res, 400, { error: "Missing search term" });
+        return;
+      }
+      try {
+        const { developerToken } = createAppleMusicDeveloperToken();
+        const params = new URLSearchParams({ term, types, limit: String(limit) });
+        const apiRes = await fetch(
+          `https://api.music.apple.com/v1/catalog/us/search?${params.toString()}`,
+          { headers: { Authorization: `Bearer ${developerToken}` } }
+        );
+        const body = await apiRes.json().catch(() => ({}));
+        if (!apiRes.ok) {
+          sendJson(res, apiRes.status, {
+            error: body?.errors?.[0]?.title || "Apple Music search failed",
+          });
+          return;
+        }
+        res.setHeader("Cache-Control", "private, max-age=60");
+        sendJson(res, 200, body);
+      } catch (e) {
+        sendJson(res, 500, { error: String(e?.message || e) });
+      }
+      return;
+    }
+
     sendJson(res, 404, { error: "Not found" });
   } catch (e) {
     console.error(e);
@@ -113,4 +179,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Hit 4 Hit API listening on http://0.0.0.0:${PORT}`);
   console.log(`  Health: http://127.0.0.1:${PORT}/api/health`);
+  console.log(`  MusicKit: http://127.0.0.1:${PORT}/api/musickit-token`);
 });

@@ -18,6 +18,7 @@ export default function SpotifySongPicker({
   canPlay = false,
   playUri,
   playerStatus = "",
+  providerLabel = "Spotify",
 }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
@@ -62,7 +63,10 @@ export default function SpotifySongPicker({
           lineHeight: 1.45,
         }}
       >
-        Waiting for the host to log in to Spotify so everyone can search tracks.
+        Waiting for {providerLabel} search
+        {providerLabel === "Spotify"
+          ? " — host must log in first."
+          : " to connect."}
       </div>
     );
   }
@@ -73,7 +77,7 @@ export default function SpotifySongPicker({
         className="bf"
         style={{ fontSize: 10, color: MUTED2, marginBottom: 6, letterSpacing: "0.06em" }}
       >
-        SPOTIFY
+        {providerLabel.toUpperCase()}
       </div>
       {canPlay && playerStatus ? (
         <div className="bf" style={{ fontSize: 11, color: "#facc15", marginBottom: 8 }}>
@@ -91,7 +95,7 @@ export default function SpotifySongPicker({
           placeholder={
             roundArtist
               ? `Search tracks — ${roundArtist}…`
-              : "Search Spotify tracks…"
+              : `Search ${providerLabel} tracks…`
           }
           value={q}
           disabled={disabled}

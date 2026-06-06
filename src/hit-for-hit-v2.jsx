@@ -14,6 +14,7 @@ import {
 } from "./firebase/gameService.js";
 import { isFirebaseConfigured } from "./firebase/config.js";
 import { useSpotify } from "./useSpotify.js";
+import { useAppleMusic } from "./useAppleMusic.js";
 import SpotifySongPicker from "./SpotifySongPicker.jsx";
 import { getInviteUrl } from "./appUrl.js";
 import { getStoredSession } from "./spotifyAuth.js";
@@ -22,21 +23,20 @@ import {
   searchArtistsWithToken,
   searchTracksWithToken,
 } from "./spotifyApi.js";
+import {
+  MUSIC_PROVIDERS,
+  musicProviderLabel,
+  normalizeMusicProvider,
+} from "./musicConstants.js";
+import ArtistSearch from "./musickit/ArtistSearch.jsx";
+import {
+  authorizeHost,
+  configureMusicKit,
+  getDeveloperToken,
+  unauthorizeHost,
+} from "./musickit/musickitService.js";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
-
-const POPULAR_ARTISTS = [
-  "Drake","Taylor Swift","Kendrick Lamar","Beyoncé","The Weeknd",
-  "Bad Bunny","Rihanna","Eminem","Jay-Z","Kanye West",
-  "Lil Wayne","Nicki Minaj","Cardi B","Post Malone","Travis Scott",
-  "J. Cole","21 Savage","SZA","Doja Cat","Ariana Grande",
-  "Bruno Mars","Ed Sheeran","Justin Bieber","Lady Gaga","Billie Eilish",
-  "Frank Ocean","Tyler the Creator","Childish Gambino","Chance the Rapper",
-  "Future","Lil Baby","Gunna","Young Thug","Megan Thee Stallion",
-  "Olivia Rodrigo","Dua Lipa","The Beatles","Michael Jackson","Prince",
-  "Whitney Houston","Mariah Carey","Adele","Sam Smith","Harry Styles",
-  "Sabrina Carpenter","Chappell Roan","Ice Spice","GloRilla","Sexyy Red",
-];
 
 const FINAL_PUNISHMENTS = [
   "Loser finishes their entire drink in one go",
@@ -167,6 +167,7 @@ const CheckIcon = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="no
 
 export default function HitForHit() {
   const spotify = useSpotify();
+  const apple = useAppleMusic();
 
   // ── Local identity
   const [screen, setScreen]     = useState("home");
@@ -192,10 +193,11 @@ export default function HitForHit() {
 
   // ── Create form
   const [player1Name, setPlayer1Name] = useState("");
-  const [artist1, setArtist1]   = useState("");
-  const [a1Filter, setA1Filter] = useState("");
-  const [a1Open, setA1Open]     = useState(false);
   const [rounds, setRounds]     = useState(5);
+  const [musicProvider, setMusicProvider] = useState(MUSIC_PROVIDERS.SPOTIFY);
+  const [musicKitReady, setMusicKitReady] = useState(false);
+  const [appleMusicConnected, setAppleMusicConnected] = useState(false);
+  const [musicKitStatus, setMusicKitStatus] = useState("");
   const [hostPickP1, setHostPickP1] = useState("");
   const [hostPickP2, setHostPickP2] = useState("");
 
@@ -203,22 +205,7 @@ export default function HitForHit() {
   const [mySong, setMySong]     = useState("");
   const [songSubmitted, setSongSubmitted] = useState(false);
 
-  // ── Artist2 (player2 sets in lobby)
-  const [artist2, setArtist2]   = useState("");
-  const [a2Filter, setA2Filter] = useState("");
-  const [a2Open, setA2Open]     = useState(false);
-
-  const [a1SpotifyHits, setA1SpotifyHits] = useState([]);
-  const [a2SpotifyHits, setA2SpotifyHits] = useState([]);
-  const [a1SpotLoading, setA1SpotLoading] = useState(false);
-  const [a2SpotLoading, setA2SpotLoading] = useState(false);
-
   const unsubRef = useRef(null);
-  const a1SearchEpochRef = useRef(0);
-  const a2SearchEpochRef = useRef(0);
-
-  const filtered1 = POPULAR_ARTISTS.filter(a => a1Filter && a.toLowerCase().includes(a1Filter.toLowerCase()));
-  const filtered2 = POPULAR_ARTISTS.filter(a => a2Filter && a.toLowerCase().includes(a2Filter.toLowerCase()));
 
   const startListening = useCallback((code) => {
     if (unsubRef.current) unsubRef.current();
@@ -339,6 +326,7 @@ export default function HitForHit() {
       roundPunishment: "",
       finalPunishment: "",
       roundWinner: null,
+      musicProvider: normalizeMusicProvider(musicProvider),
       updatedAt: Date.now(),
     };
     try {
@@ -437,13 +425,11 @@ export default function HitForHit() {
   // ── SET ARTISTS (in lobby) ───────────────────────────────────────────────
   const submitArtist1 = async (val) => {
     if (!gs) return;
-    setArtist1(val);
     try { await updateGame(gs.code, { artist1: val }); } catch { showToast("Failed to save artist — try again"); }
   };
 
   const submitArtist2 = async (val) => {
     if (!gs) return;
-    setArtist2(val);
     try { await updateGame(gs.code, { artist2: val }); } catch { showToast("Failed to save artist — try again"); }
   };
 
@@ -660,8 +646,8 @@ export default function HitForHit() {
       }
     }
     setGs(null); setMyRole(null); setMyName(""); setMySong("");
-    setSongSubmitted(false); setArtist1(""); setArtist2("");
-    setA1Filter(""); setA2Filter(""); setPlayer1Name("");
+    setSongSubmitted(false);
+    setPlayer1Name("");
     setJoinCode(""); setJoinError("");
     setHostPickP1(""); setHostPickP2("");
     setScreen("home");
@@ -676,9 +662,78 @@ export default function HitForHit() {
   const isJudge   = Boolean(gs && myName && toArray(gs.judges).includes(myName));
   const isPlayer  = isPlayer1 || isPlayer2;
 
-  const canManageSpotify = isHost || screen === "create";
-  const spotifySearchReady =
-    (isHost && spotify.loggedIn) || isSharedSpotifyTokenValid(gs);
+  const activeMusicProvider = normalizeMusicProvider(gs?.musicProvider || musicProvider);
+  const musicLabel = musicProviderLabel(activeMusicProvider);
+  const usesAppleMusic = activeMusicProvider === MUSIC_PROVIDERS.APPLE;
+
+  const canManageSpotify = (isHost || screen === "create") && !usesAppleMusic;
+  const canManageAppleMusic = (isHost || screen === "create") && usesAppleMusic;
+  const musicSearchReady = usesAppleMusic
+    ? musicKitReady
+    : (isHost && spotify.loggedIn) || isSharedSpotifyTokenValid(gs);
+
+  useEffect(() => {
+    if (!usesAppleMusic) {
+      setMusicKitReady(false);
+      setAppleMusicConnected(false);
+      setMusicKitStatus("");
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setMusicKitStatus("Loading Apple Music…");
+        const token = await getDeveloperToken();
+        if (cancelled) return;
+        const music = await configureMusicKit(token);
+        if (cancelled) return;
+        setMusicKitReady(true);
+        setAppleMusicConnected(Boolean(music?.isAuthorized));
+        setMusicKitStatus("");
+      } catch (e) {
+        if (!cancelled) {
+          setMusicKitReady(false);
+          setAppleMusicConnected(false);
+          setMusicKitStatus(String(e?.message || e));
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [usesAppleMusic]);
+
+  const connectAppleMusic = useCallback(async () => {
+    try {
+      saveAppRestore({
+        screen,
+        myName,
+        myRole,
+        joinCode,
+        player1Name,
+        gameCode: gs?.code || null,
+      });
+      await authorizeHost();
+      setAppleMusicConnected(true);
+      setMusicKitReady(true);
+      showToast("Apple Music connected");
+    } catch (e) {
+      showToast(String(e?.message || e));
+    }
+  }, [screen, myName, myRole, joinCode, player1Name, gs?.code, showToast]);
+
+  const disconnectAppleMusic = useCallback(async () => {
+    try {
+      await unauthorizeHost();
+      setAppleMusicConnected(false);
+      showToast("Apple Music disconnected");
+    } catch (e) {
+      showToast(String(e?.message || e));
+    }
+  }, [showToast]);
 
   const getSpotifySearchToken = useCallback(async () => {
     if (isHost && spotify.loggedIn) {
@@ -690,12 +745,23 @@ export default function HitForHit() {
     throw new Error("Host must log in to Spotify for search");
   }, [gs, isHost, spotify]);
 
+  const searchSpotifyArtists = useCallback(
+    async (q) => {
+      const token = await getSpotifySearchToken();
+      return searchArtistsWithToken(token, q, 10);
+    },
+    [getSpotifySearchToken]
+  );
+
   const sharedSearchTracks = useCallback(
     async (q, limit, opts) => {
+      if (usesAppleMusic) {
+        return apple.searchTracks(q, limit, opts);
+      }
       const token = await getSpotifySearchToken();
       return searchTracksWithToken(token, q, limit, opts);
     },
-    [getSpotifySearchToken]
+    [usesAppleMusic, apple, getSpotifySearchToken]
   );
 
   const hostSpotifyLogout = useCallback(async () => {
@@ -714,7 +780,7 @@ export default function HitForHit() {
   }, [gs?.code, isHost, spotify, showToast]);
 
   useEffect(() => {
-    if (!isHost || !gs?.code || !spotify.loggedIn) return;
+    if (usesAppleMusic || !isHost || !gs?.code || !spotify.loggedIn) return;
 
     let cancelled = false;
 
@@ -741,87 +807,7 @@ export default function HitForHit() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [isHost, gs?.code, spotify.loggedIn, spotify]);
-
-  useEffect(() => {
-    if (!spotifySearchReady) {
-      queueMicrotask(() => {
-        setA1SpotifyHits([]);
-        setA1SpotLoading(false);
-      });
-      return;
-    }
-    const q = a1Filter.trim();
-    if (q.length < 2) {
-      queueMicrotask(() => {
-        setA1SpotifyHits([]);
-        setA1SpotLoading(false);
-      });
-      return;
-    }
-    const tid = setTimeout(async () => {
-      const startEpoch = a1SearchEpochRef.current;
-      setA1SpotLoading(true);
-      try {
-        const token = await getSpotifySearchToken();
-        if (a1SearchEpochRef.current !== startEpoch) return;
-        const items = await searchArtistsWithToken(token, q, 10);
-        if (a1SearchEpochRef.current !== startEpoch) return;
-        setA1SpotifyHits(Array.isArray(items) ? items.filter((a) => a?.name) : []);
-      } catch (e) {
-        if (a1SearchEpochRef.current === startEpoch) {
-          setA1SpotifyHits([]);
-          showToast(String(e?.message || e));
-        }
-      } finally {
-        setA1SpotLoading(false);
-      }
-    }, 400);
-    return () => {
-      clearTimeout(tid);
-      a1SearchEpochRef.current += 1;
-    };
-  }, [a1Filter, spotifySearchReady, getSpotifySearchToken, showToast]);
-
-  useEffect(() => {
-    if (!spotifySearchReady) {
-      queueMicrotask(() => {
-        setA2SpotifyHits([]);
-        setA2SpotLoading(false);
-      });
-      return;
-    }
-    const q = a2Filter.trim();
-    if (q.length < 2) {
-      queueMicrotask(() => {
-        setA2SpotifyHits([]);
-        setA2SpotLoading(false);
-      });
-      return;
-    }
-    const tid = setTimeout(async () => {
-      const startEpoch = a2SearchEpochRef.current;
-      setA2SpotLoading(true);
-      try {
-        const token = await getSpotifySearchToken();
-        if (a2SearchEpochRef.current !== startEpoch) return;
-        const items = await searchArtistsWithToken(token, q, 10);
-        if (a2SearchEpochRef.current !== startEpoch) return;
-        setA2SpotifyHits(Array.isArray(items) ? items.filter((a) => a?.name) : []);
-      } catch (e) {
-        if (a2SearchEpochRef.current === startEpoch) {
-          setA2SpotifyHits([]);
-          showToast(String(e?.message || e));
-        }
-      } finally {
-        setA2SpotLoading(false);
-      }
-    }, 400);
-    return () => {
-      clearTimeout(tid);
-      a2SearchEpochRef.current += 1;
-    };
-  }, [a2Filter, spotifySearchReady, getSpotifySearchToken, showToast]);
+  }, [usesAppleMusic, isHost, gs?.code, spotify.loggedIn, spotify]);
 
   const members = gs ? toArray(gs.members) : [];
   const judges = gs ? toArray(gs.judges) : [];
@@ -932,10 +918,43 @@ export default function HitForHit() {
             </span>
           )}
           <div style={{display:"flex",alignItems:"center",gap:6}}>
-            {canManageSpotify ? (
+            {usesAppleMusic ? (
+              !musicKitReady ? (
+                <span
+                  className="bf"
+                  style={{ fontSize: 10, color: MUTED3 }}
+                  title={musicKitStatus || "Apple Music loading…"}
+                >
+                  {musicLabel}
+                </span>
+              ) : canManageAppleMusic && !appleMusicConnected ? (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  style={{ padding: "4px 10px", fontSize: 11 }}
+                  onClick={() => connectAppleMusic()}
+                >
+                  Connect {musicLabel}
+                </button>
+              ) : canManageAppleMusic && appleMusicConnected ? (
+                <>
+                  <span className="bf" style={{ fontSize: 10, color: MUTED1 }}>{musicLabel}</span>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    style={{ padding: "4px 10px", fontSize: 11 }}
+                    onClick={() => disconnectAppleMusic()}
+                  >
+                    Log out
+                  </button>
+                </>
+              ) : (
+                <span className="bf" style={{ fontSize: 10, color: MUTED1 }}>{musicLabel} ✓</span>
+              )
+            ) : canManageSpotify ? (
               spotify.loggedIn ? (
                 <>
-                  <span className="bf" style={{fontSize:10,color:MUTED1}}>Spotify</span>
+                  <span className="bf" style={{fontSize:10,color:MUTED1}}>{musicLabel}</span>
                   <button
                     type="button"
                     className="btn-ghost"
@@ -966,13 +985,13 @@ export default function HitForHit() {
                     }
                   }}
                 >
-                  Spotify
+                  {musicLabel}
                 </button>
               )
-            ) : spotifySearchReady ? (
-              <span className="bf" style={{fontSize:10,color:MUTED1}}>Spotify ✓</span>
+            ) : musicSearchReady ? (
+              <span className="bf" style={{fontSize:10,color:MUTED1}}>{musicLabel} ✓</span>
             ) : (
-              <span className="bf" style={{fontSize:10,color:MUTED3}} title="Host logs in to Spotify for everyone">Spotify</span>
+              <span className="bf" style={{fontSize:10,color:MUTED3}} title="Host logs in to Spotify for everyone">{musicLabel}</span>
             )}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:4}} title="Game sync via Firebase Realtime Database">
@@ -1048,6 +1067,41 @@ export default function HitForHit() {
             </div>
 
             <div style={{marginBottom:"1.5rem"}}>
+              <div className="bf" style={{fontSize:11,color:MUTED2,letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>Music service</div>
+              <div style={{display:"flex",gap:8}}>
+                {[
+                  [MUSIC_PROVIDERS.SPOTIFY, "Spotify"],
+                  [MUSIC_PROVIDERS.APPLE, "Apple Music"],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setMusicProvider(value)}
+                    className="bf"
+                    style={{
+                      flex: 1,
+                      background: musicProvider === value ? C : SURFACE2,
+                      border: `1px solid ${musicProvider === value ? C : BORDER}`,
+                      borderRadius: 8,
+                      color: musicProvider === value ? "#fff" : MUTED1,
+                      cursor: "pointer",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      padding: "10px 12px",
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="bf" style={{color:MUTED3,fontSize:11,marginTop:8,lineHeight:1.45}}>
+                {musicProvider === MUSIC_PROVIDERS.APPLE
+                  ? "Apple Music search works for everyone once the server is configured. Playback comes in a later update."
+                  : "Spotify: host logs in once so everyone can search artists and songs."}
+              </div>
+            </div>
+
+            <div style={{marginBottom:"1.5rem"}}>
               <div className="bf" style={{fontSize:11,color:MUTED2,letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>Rounds (max 12)</div>
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                 {[1,2,3,4,5,6,7,8,9,10,11,12].map((r)=>(
@@ -1110,10 +1164,26 @@ export default function HitForHit() {
               </div>
             </div>
 
-            {isHost && !spotify.loggedIn && (
+            {isHost && !usesAppleMusic && !spotify.loggedIn && (
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
                 <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
                   Log in with Spotify above so everyone in the lobby can search artists and songs.
+                </div>
+              </div>
+            )}
+
+            {isHost && usesAppleMusic && musicKitReady && !appleMusicConnected && (
+              <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
+                <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
+                  Connect Apple Music above for playback. Everyone can search artists once MusicKit loads.
+                </div>
+              </div>
+            )}
+
+            {usesAppleMusic && !musicKitReady && musicKitStatus && (
+              <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#f8717144"}}>
+                <div className="bf" style={{color:"#f87171",fontSize:12,lineHeight:1.5}}>
+                  Apple Music unavailable: {musicKitStatus}
                 </div>
               </div>
             )}
@@ -1177,68 +1247,19 @@ export default function HitForHit() {
                       {name ? (
                         <>
                           <div className="bf" style={{color:TEXT,fontSize:13,fontWeight:600}}>{name}</div>
-                          {showPicker && i===0 ? (
-                            <div style={{marginTop:6,position:"relative"}}>
-                              <input className="inp" style={{fontSize:12,padding:"6px 10px"}} placeholder={spotifySearchReady?"Spotify or quick picks…":"Pick your artist"}
-                                value={a1Filter||artist1}
-                                onChange={e=>{setA1Filter(e.target.value);setArtist1("");setA1Open(true);}}
-                                onFocus={()=>setA1Open(true)} onBlur={()=>setTimeout(()=>setA1Open(false),160)}/>
-                              {a1Open && (
-                                a1SpotLoading ||
-                                a1SpotifyHits.length > 0 ||
-                                (spotifySearchReady && a1Filter.trim().length >= 2 && !a1SpotLoading) ||
-                                ((!spotifySearchReady || a1Filter.trim().length < 2) && filtered1.length > 0)
-                              ) && (
-                                <div style={{position:"absolute",top:"100%",left:0,right:0,background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:6,overflow:"hidden",zIndex:10,maxHeight:150,overflowY:"auto"}}>
-                                  {spotifySearchReady && a1Filter.trim().length>=2 && a1SpotLoading && (
-                                    <div className="bf" style={{padding:"8px 12px",color:MUTED2,fontSize:11}}>Searching Spotify…</div>
-                                  )}
-                                  {spotifySearchReady && a1Filter.trim().length>=2 && !a1SpotLoading && a1SpotifyHits.map((a)=>(
-                                    <button key={a.id} type="button" className="sug" onMouseDown={()=>{setA1Filter(a.name);submitArtist1(a.name);setA1Open(false);}}>{a.name}</button>
-                                  ))}
-                                  {spotifySearchReady && a1Filter.trim().length>=2 && !a1SpotLoading && a1SpotifyHits.length===0 && (
-                                    <div className="bf" style={{padding:"6px 12px",color:MUTED3,fontSize:11}}>No Spotify — quick picks:</div>
-                                  )}
-                                  {spotifySearchReady && a1Filter.trim().length>=2 && !a1SpotLoading && a1SpotifyHits.length===0 && filtered1.slice(0,4).map((a)=>(
-                                    <button key={a} type="button" className="sug" onMouseDown={()=>{setA1Filter(a);submitArtist1(a);setA1Open(false);}}>{a}</button>
-                                  ))}
-                                  {(!spotifySearchReady||a1Filter.trim().length<2)&&filtered1.slice(0,5).map((a)=>(
-                                    <button key={a} type="button" className="sug" onMouseDown={()=>{setA1Filter(a);submitArtist1(a);setA1Open(false);}}>{a}</button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          ) : showPicker && i===1 ? (
-                            <div style={{marginTop:6,position:"relative"}}>
-                              <input className="inp" style={{fontSize:12,padding:"6px 10px"}} placeholder={spotifySearchReady?"Spotify or quick picks…":"Pick your artist"}
-                                value={a2Filter||artist2}
-                                onChange={e=>{setA2Filter(e.target.value);setArtist2("");setA2Open(true);}}
-                                onFocus={()=>setA2Open(true)} onBlur={()=>setTimeout(()=>setA2Open(false),160)}/>
-                              {a2Open && (
-                                a2SpotLoading ||
-                                a2SpotifyHits.length > 0 ||
-                                (spotifySearchReady && a2Filter.trim().length >= 2 && !a2SpotLoading) ||
-                                ((!spotifySearchReady || a2Filter.trim().length < 2) && filtered2.length > 0)
-                              ) && (
-                                <div style={{position:"absolute",top:"100%",left:0,right:0,background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:6,overflow:"hidden",zIndex:10,maxHeight:150,overflowY:"auto"}}>
-                                  {spotifySearchReady && a2Filter.trim().length>=2 && a2SpotLoading && (
-                                    <div className="bf" style={{padding:"8px 12px",color:MUTED2,fontSize:11}}>Searching Spotify…</div>
-                                  )}
-                                  {spotifySearchReady && a2Filter.trim().length>=2 && !a2SpotLoading && a2SpotifyHits.map((a)=>(
-                                    <button key={a.id} type="button" className="sug" onMouseDown={()=>{setA2Filter(a.name);submitArtist2(a.name);setA2Open(false);}}>{a.name}</button>
-                                  ))}
-                                  {spotifySearchReady && a2Filter.trim().length>=2 && !a2SpotLoading && a2SpotifyHits.length===0 && (
-                                    <div className="bf" style={{padding:"6px 12px",color:MUTED3,fontSize:11}}>No Spotify — quick picks:</div>
-                                  )}
-                                  {spotifySearchReady && a2Filter.trim().length>=2 && !a2SpotLoading && a2SpotifyHits.length===0 && filtered2.slice(0,4).map((a)=>(
-                                    <button key={a} type="button" className="sug" onMouseDown={()=>{setA2Filter(a);submitArtist2(a);setA2Open(false);}}>{a}</button>
-                                  ))}
-                                  {(!spotifySearchReady||a2Filter.trim().length<2)&&filtered2.slice(0,5).map((a)=>(
-                                    <button key={a} type="button" className="sug" onMouseDown={()=>{setA2Filter(a);submitArtist2(a);setA2Open(false);}}>{a}</button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
+                          {showPicker ? (
+                            <ArtistSearch
+                              placeholder="Pick your artist"
+                              searchReady={musicSearchReady}
+                              usesAppleMusic={usesAppleMusic}
+                              musicKitReady={musicKitReady}
+                              musicLabel={musicLabel}
+                              onSelect={i === 0 ? submitArtist1 : submitArtist2}
+                              onToast={showToast}
+                              searchSpotifyArtists={
+                                usesAppleMusic ? undefined : searchSpotifyArtists
+                              }
+                            />
                           ) : (
                             <div className="bf" style={{color:MUTED2,fontSize:11,marginTop:2}}>{art||(needArt?"Choose your artist…":"")}</div>
                           )}
@@ -1348,11 +1369,12 @@ export default function HitForHit() {
                             disabled={songSubmitted}
                             onToast={showToast}
                             roundArtist={isPlayer1 ? gs.artist1 : gs.artist2}
-                            searchEnabled={spotifySearchReady}
+                            searchEnabled={musicSearchReady}
                             searchTracks={sharedSearchTracks}
-                            canPlay={isHost && Boolean(spotify.deviceId)}
+                            canPlay={!usesAppleMusic && isHost && Boolean(spotify.deviceId)}
                             playUri={spotify.playUri}
-                            playerStatus={isHost ? spotify.playerStatus : ""}
+                            playerStatus={!usesAppleMusic && isHost ? spotify.playerStatus : ""}
+                            providerLabel={musicLabel}
                           />
                         </>
                       ) : (
