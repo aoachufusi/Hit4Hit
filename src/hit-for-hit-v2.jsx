@@ -672,6 +672,9 @@ export default function HitForHit() {
   const myMusicLabel = musicProviderLabel(
     iUseAppleMusic ? MUSIC_PROVIDERS.APPLE : MUSIC_PROVIDERS.SPOTIFY
   );
+  const musicServiceHint = iUseAppleMusic
+    ? "You’re using Apple Music for search on this device."
+    : "You’re using Spotify for search. Host must log in if you’re not the host.";
 
   const canManageSpotify = isHost || screen === "create";
   const canManageAppleMusic = iUseAppleMusic;
@@ -925,14 +928,6 @@ export default function HitForHit() {
             </span>
           )}
           <div style={{display:"flex",alignItems:"center",gap:6}}>
-            {musicKitReady && screen !== "home" && (
-              <MusicProviderPicker
-                compact
-                value={myMusicProvider}
-                onChange={setMyMusicProviderPersist}
-                appleEnabled={musicKitReady}
-              />
-            )}
             {iUseAppleMusic ? (
               !musicKitReady ? (
                 <span
@@ -1017,6 +1012,16 @@ export default function HitForHit() {
           </div>
         </div>
       </div>
+
+      {musicKitReady && screen !== "home" && (
+        <MusicProviderPicker
+          sectioned
+          value={myMusicProvider}
+          onChange={setMyMusicProviderPersist}
+          appleEnabled={musicKitReady}
+          hint={musicServiceHint}
+        />
+      )}
 
       <main style={{maxWidth:500,margin:"0 auto",padding:"1.25rem 1rem 3rem"}}>
 
@@ -1148,21 +1153,6 @@ export default function HitForHit() {
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
                 <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
                   Log in with Spotify above so players who choose Spotify can search artists and songs.
-                </div>
-              </div>
-            )}
-
-            {musicKitReady && myName && (
-              <div className="card" style={{padding:"1rem 1.25rem",marginBottom:10}}>
-                <MusicProviderPicker
-                  value={myMusicProvider}
-                  onChange={setMyMusicProviderPersist}
-                  appleEnabled={musicKitReady}
-                />
-                <div className="bf" style={{color:MUTED3,fontSize:11,marginTop:8,lineHeight:1.45}}>
-                  {iUseAppleMusic
-                    ? "You’re using Apple Music for search on this device."
-                    : "You’re using Spotify for search. Host must log in if you’re not the host."}
                 </div>
               </div>
             )}
