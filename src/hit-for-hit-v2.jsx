@@ -1013,7 +1013,7 @@ export default function HitForHit() {
         </div>
       </div>
 
-      {musicKitReady && screen !== "home" && (
+      {musicKitReady && screen === "lobby" && (
         <MusicProviderPicker
           sectioned
           value={myMusicProvider}
