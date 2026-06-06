@@ -13,6 +13,7 @@ const MUTED2 = "#7a5fa8";
 const MUTED3 = "#4a3370";
 
 export default function ArtistSearch({
+  value = "",
   placeholder = "Search artists…",
   disabled = false,
   searchReady = false,
@@ -24,12 +25,16 @@ export default function ArtistSearch({
   onToast,
   searchSpotifyArtists,
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(value);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const searchEpochRef = useRef(0);
   const { handleInputBlur, pickFromDropdown } = useSearchDropdown();
+
+  useEffect(() => {
+    setQuery(value || "");
+  }, [value]);
 
   const canSearch = searchReady;
   const trimmed = query.trim();
@@ -95,7 +100,13 @@ export default function ArtistSearch({
           padding: "6px 10px",
           opacity: disabled ? 0.45 : 1,
         }}
-        placeholder={canSearch ? `${musicLabel} search…` : placeholder}
+        placeholder={
+          canSearch
+            ? value
+              ? `${musicLabel} — search to change artist…`
+              : `${musicLabel} search…`
+            : placeholder
+        }
         value={query}
         disabled={disabled}
         onChange={(e) => {

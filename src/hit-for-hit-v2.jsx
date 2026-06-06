@@ -1482,8 +1482,7 @@ export default function HitForHit() {
                   const art   = i===0?gs.artist1:gs.artist2;
                   const col   = COLORS[i];
                   const isMe  = (i===0&&isPlayer1)||(i===1&&isPlayer2);
-                  const needArt = i===0 ? !gs.artist1 : !gs.artist2;
-                  const showPicker = name && isMe && needArt;
+                  const showPicker = name && isMe && gs.phase === PHASES.LOBBY;
                   return (
                     <div key={i} style={{background:name?COLORS_DIM[i]:SURFACE2,border:`1px solid ${name?col+"44":BORDER}`,borderRadius:8,padding:"0.75rem"}}>
                       <div className="hd" style={{color:col,fontSize:12,letterSpacing:".05em",marginBottom:4}}>
@@ -1493,21 +1492,34 @@ export default function HitForHit() {
                         <>
                           <div className="bf" style={{color:TEXT,fontSize:13,fontWeight:600}}>{name}</div>
                           {showPicker ? (
-                            <ArtistSearch
-                              placeholder="Pick your artist"
-                              searchReady={musicSearchReady}
-                              usesAppleMusic={usesAppleMusic}
-                              musicKitReady={musicKitReady}
-                              musicLabel={musicLabel}
-                              blockedArtists={i === 0 ? (gs.artist2 ? [gs.artist2] : []) : (gs.artist1 ? [gs.artist1] : [])}
-                              onSelect={i === 0 ? submitArtist1 : submitArtist2}
-                              onToast={showToast}
-                              searchSpotifyArtists={
-                                usesAppleMusic ? undefined : searchSpotifyArtists
-                              }
-                            />
+                            <>
+                              {art && (
+                                <div className="bf" style={{color:"#4ade80",fontSize:11,marginTop:4,marginBottom:2}}>
+                                  Current: {art}
+                                </div>
+                              )}
+                              <ArtistSearch
+                                value={art || ""}
+                                placeholder={art ? "Search to change artist…" : "Pick your artist"}
+                                searchReady={musicSearchReady}
+                                usesAppleMusic={usesAppleMusic}
+                                musicKitReady={musicKitReady}
+                                musicLabel={musicLabel}
+                                blockedArtists={i === 0 ? (gs.artist2 ? [gs.artist2] : []) : (gs.artist1 ? [gs.artist1] : [])}
+                                onSelect={i === 0 ? submitArtist1 : submitArtist2}
+                                onToast={showToast}
+                                searchSpotifyArtists={
+                                  usesAppleMusic ? undefined : searchSpotifyArtists
+                                }
+                              />
+                              {art && (
+                                <div className="bf" style={{color:MUTED3,fontSize:10,marginTop:4}}>
+                                  You can change your artist until the host starts the game.
+                                </div>
+                              )}
+                            </>
                           ) : (
-                            <div className="bf" style={{color:MUTED2,fontSize:11,marginTop:2}}>{art||(needArt?"Choose your artist…":"")}</div>
+                            <div className="bf" style={{color:MUTED2,fontSize:11,marginTop:2}}>{art || "—"}</div>
                           )}
                         </>
                       ) : (
@@ -1569,15 +1581,18 @@ export default function HitForHit() {
                     Split +1 each · Majority +2 / +0
                   </span>
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:8,alignItems:"center",marginBottom:10}}>
-                  {[0,1].map(i=>(
-                    <div key={i} style={{textAlign:i===0?"left":"right",gridColumn:i===0?1:3}}>
-                      <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[i]}}>{players[i].toUpperCase()}</div>
-                      <div className="bf" style={{color:MUTED3,fontSize:10}}>{i===0?gs.artist1:gs.artist2}</div>
-                      <div className="hd" style={{fontSize:40,color:COLORS[i],lineHeight:1}}>{scores[i] ?? 0}</div>
-                    </div>
-                  ))}
-                  <div className="hd" style={{color:MUTED3,fontSize:16,textAlign:"center",gridColumn:2,gridRow:1}}>VS</div>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",marginBottom:10,gap:8}}>
+                  <div style={{flex:"1 1 0",minWidth:0,textAlign:"left"}}>
+                    <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[0]}}>{players[0].toUpperCase()}</div>
+                    <div className="bf" style={{color:MUTED3,fontSize:10}}>{gs.artist1}</div>
+                    <div className="hd" style={{fontSize:40,color:COLORS[0],lineHeight:1}}>{scores[0] ?? 0}</div>
+                  </div>
+                  <div className="hd" style={{color:MUTED3,fontSize:16,flexShrink:0,textAlign:"center",padding:"0 4px"}}>VS</div>
+                  <div style={{flex:"1 1 0",minWidth:0,textAlign:"right"}}>
+                    <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[1]}}>{players[1].toUpperCase()}</div>
+                    <div className="bf" style={{color:MUTED3,fontSize:10}}>{gs.artist2}</div>
+                    <div className="hd" style={{fontSize:40,color:COLORS[1],lineHeight:1}}>{scores[1] ?? 0}</div>
+                  </div>
                 </div>
                 {(() => {
                   const s0 = scores[0] ?? 0;
