@@ -5,6 +5,7 @@ import {
   playerLabel,
   getActiveJudges,
   isGameJudge,
+  namesMatch,
   computeRoundPoints,
   roundPointsLabel,
 } from "./gameStateUtils.js";
@@ -161,8 +162,8 @@ function countAnonymousVotes(votes) {
   let v1 = 0;
   for (const k of Object.keys(votes)) {
     const val = votes[k];
-    if (val === 0) v0++;
-    else if (val === 1) v1++;
+    if (val === 0 || val === "0") v0++;
+    else if (val === 1 || val === "1") v1++;
   }
   return { v0, v1, total: v0 + v1 };
 }
@@ -484,10 +485,10 @@ export default function HitForHit() {
 
   // ── Role helpers (needed before song submit / playback handlers) ─────────
   const isHost =
-    Boolean(gs && myName && myName === gs.hostName) ||
-    (myRole === "host" && Boolean(gs) && myName === gs.player1 && !gs.hostName);
-  const isPlayer1 = Boolean(gs && myName && myName === gs.player1);
-  const isPlayer2 = Boolean(gs && myName && myName === gs.player2);
+    Boolean(gs && myName && namesMatch(myName, gs.hostName)) ||
+    (myRole === "host" && Boolean(gs) && namesMatch(myName, gs.player1) && !gs.hostName);
+  const isPlayer1 = Boolean(gs && myName && namesMatch(myName, gs.player1));
+  const isPlayer2 = Boolean(gs && myName && namesMatch(myName, gs.player2));
   const isJudge   = Boolean(gs && myName && isGameJudge(gs, myName));
   const isPlayer  = isPlayer1 || isPlayer2;
 
@@ -550,15 +551,17 @@ export default function HitForHit() {
   }, [gs?.code, gs?.phase, gs?.playbackIndex, isHost, showToast]);
 
   const openVoting = useCallback(async () => {
-    if (!gs?.code || !isHost || gs.phase !== PHASES.LISTENING) return;
+    if (!gs?.code || gs.phase !== PHASES.LISTENING) return;
+    if (!isHost && !isGameJudge(gs, myName)) return;
     try {
+      stopRoundPlayback();
       await updateGame(gs.code, { phase: PHASES.JUDGING, playbackIndex: 2 });
     } catch {
       showToast("Failed to open voting — try again");
     }
-  }, [gs?.code, gs?.phase, isHost, showToast]);
+  }, [gs, isHost, myName, showToast]);
 
-  // Auto-advance to listening when both songs in (non-host poll picks this up)
+  // Host device moves PLAYING → LISTENING once both songs are locked in
   useEffect(() => {
     if (!gs || !isHost || gs.phase !== PHASES.PLAYING) return;
     if (gs.p1Ready && gs.p2Ready && gs.song1 && gs.song2) {
@@ -580,13 +583,22 @@ export default function HitForHit() {
 
   // ── CAST VOTE (judges only, anonymous ballot id) ────────────────────────
   const castVote = async (playerIdx) => {
-    if (!gs || !isGameJudge(gs, myName)) return;
+    if (!gs) return;
+    if (gs.phase !== PHASES.JUDGING) {
+      showToast("Voting isn't open yet — wait for the host or tap Open voting");
+      return;
+    }
+    if (!isGameJudge(gs, myName)) {
+      showToast("Only judges can vote in this round");
+      return;
+    }
     const votes = gs.judgeVotes || {};
     const ballotId = getJudgeBallotId(gs.code);
     if (votes[ballotId] !== undefined) { showToast("You already voted!"); return; }
 
     try {
       await firebaseCastVote(gs.code, ballotId, playerIdx);
+      showToast("Vote recorded ✓");
     } catch {
       showToast("Failed to submit vote — try again");
     }
@@ -846,6 +858,7 @@ export default function HitForHit() {
     const index = gs.playbackIndex ?? 0;
     if (index >= 2) {
       if (isHost) advancePlayback();
+      else if (isGameJudge(gs, myName)) openVoting();
       return;
     }
 
@@ -912,6 +925,7 @@ export default function HitForHit() {
     spotify.deviceId,
     spotify.playUri,
     advancePlayback,
+    openVoting,
   ]);
 
   // Safety net: host auto-advances if playback stalls
@@ -920,6 +934,13 @@ export default function HitForHit() {
     const timer = setTimeout(() => advancePlayback(), 45_000);
     return () => clearTimeout(timer);
   }, [isHost, gs?.phase, gs?.playbackIndex, advancePlayback]);
+
+  // Judges can open voting if the host never advances past listening
+  useEffect(() => {
+    if (!gs || gs.phase !== PHASES.LISTENING || !isJudge) return;
+    const timer = setTimeout(() => openVoting(), 75_000);
+    return () => clearTimeout(timer);
+  }, [gs?.phase, gs?.code, gs?.playbackIndex, isJudge, openVoting]);
 
   const hostSpotifyLogout = useCallback(async () => {
     spotify.logout();
@@ -1713,9 +1734,25 @@ export default function HitForHit() {
                   </div>
                 )}
 
-                {isJudge && (
+                {isJudge && !isHost && (
+                  <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:8}}>
+                    <div className="bf" style={{textAlign:"center",color:MUTED2,fontSize:13}}>
+                      Both songs should play first — or skip ahead when you&apos;re ready to vote.
+                    </div>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{width:"100%",background:C,color:"#fff",fontSize:15}}
+                      onPointerDown={(e) => { e.preventDefault(); openVoting(); }}
+                    >
+                      Open voting now
+                    </button>
+                  </div>
+                )}
+
+                {isJudge && isHost && (
                   <div className="bf" style={{textAlign:"center",color:MUTED2,fontSize:13,padding:"0.5rem 0 1rem"}}>
-                    Voting opens after both songs finish…
+                    Tap &quot;Open voting now&quot; above when both songs have played.
                   </div>
                 )}
 
@@ -1759,8 +1796,13 @@ export default function HitForHit() {
                     <div className="bf" style={{color:MUTED1,fontSize:12,marginBottom:8,textAlign:"center"}}>Your anonymous pick:</div>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                       {[0,1].map(i=>(
-                        <button key={i} className="vote-btn" onClick={()=>castVote(i)}
-                          style={{background:COLORS_DIM[i],borderColor:COLORS[i],color:COLORS[i]}}>
+                        <button
+                          key={i}
+                          type="button"
+                          className="vote-btn"
+                          onPointerDown={(e) => { e.preventDefault(); castVote(i); }}
+                          style={{background:COLORS_DIM[i],borderColor:COLORS[i],color:COLORS[i],touchAction:"manipulation"}}
+                        >
                           🏆 {players[i].toUpperCase()}
                         </button>
                       ))}

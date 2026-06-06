@@ -26,11 +26,20 @@ export function normalizeGameState(g) {
       ];
     }
     const scores = toArray(g.scores);
+    let judges = toArray(g.judges);
+    if (g.player1 && g.player2 && members.length > 0) {
+      judges = members.filter(
+        (m) =>
+          m &&
+          normalizeName(m) !== normalizeName(g.player1) &&
+          normalizeName(m) !== normalizeName(g.player2)
+      );
+    }
     return {
       ...g,
       hostName,
       members,
-      judges: toArray(g.judges),
+      judges,
       scores: scores.length >= 2 ? scores : [scores[0] ?? 0, scores[1] ?? 0],
       roundHistory: toArray(g.roundHistory),
     };
@@ -53,16 +62,21 @@ export function playerLabel(name, fallback = "Player") {
 /** Everyone in the lobby who is not one of the two music players. */
 export function getActiveJudges(gs) {
   if (!gs) return [];
-  const listed = toArray(gs.judges);
-  if (listed.length > 0) return listed;
-  if (!gs.player1 || !gs.player2) return [];
-  const members = toArray(gs.members);
-  return members.filter((m) => m && m !== gs.player1 && m !== gs.player2);
+  return toArray(gs.judges);
+}
+
+function normalizeName(name) {
+  return String(name || "").trim();
+}
+
+export function namesMatch(a, b) {
+  return normalizeName(a) === normalizeName(b);
 }
 
 export function isGameJudge(gs, myName) {
   if (!gs || !myName) return false;
-  return getActiveJudges(gs).includes(myName);
+  const me = normalizeName(myName);
+  return getActiveJudges(gs).some((j) => normalizeName(j) === me);
 }
 
 /** Max points one player can earn in a single round (majority win). */
