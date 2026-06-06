@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useSpotify } from "./useSpotify.js";
 
 const BORDER = "#2e1f4a";
 const SURFACE2 = "#160f25";
@@ -14,16 +13,19 @@ export default function SpotifySongPicker({
   onToast,
   /** When set, track search is biased to this artist (your battle artist). */
   roundArtist,
+  searchEnabled = false,
+  searchTracks,
+  canPlay = false,
+  playUri,
+  playerStatus = "",
 }) {
-  const { loggedIn, deviceId, playerStatus, searchTracks, playUri } =
-    useSpotify();
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
   const [busy, setBusy] = useState(false);
 
   async function runSearch(e) {
     e.preventDefault();
-    if (!q.trim() || disabled) return;
+    if (!q.trim() || disabled || !searchEnabled || !searchTracks) return;
     setBusy(true);
     setResults([]);
     try {
@@ -41,14 +43,15 @@ export default function SpotifySongPicker({
   async function pickTrack(track) {
     const label = `${track.name} — ${track.artists.map((a) => a.name).join(", ")}`;
     setMySong(label);
+    if (!canPlay || !playUri) return;
     try {
-      if (deviceId) await playUri(track.uri);
+      await playUri(track.uri);
     } catch (err) {
       onToast?.(String(err?.message || err));
     }
   }
 
-  if (!loggedIn) {
+  if (!searchEnabled) {
     return (
       <div
         className="bf"
@@ -59,8 +62,7 @@ export default function SpotifySongPicker({
           lineHeight: 1.45,
         }}
       >
-        Log in with Spotify in the header (uses your Client ID + account) to
-        search tracks and play them in your browser (Premium).
+        Waiting for the host to log in to Spotify so everyone can search tracks.
       </div>
     );
   }
@@ -73,7 +75,7 @@ export default function SpotifySongPicker({
       >
         SPOTIFY
       </div>
-      {playerStatus && !deviceId ? (
+      {canPlay && playerStatus ? (
         <div className="bf" style={{ fontSize: 11, color: "#facc15", marginBottom: 8 }}>
           {playerStatus}
         </div>
@@ -141,9 +143,9 @@ export default function SpotifySongPicker({
         </div>
       )}
 
-      {loggedIn && deviceId && (
+      {canPlay && (
         <div className="bf" style={{ fontSize: 10, color: MUTED3, marginTop: 6 }}>
-          Tap a result to fill your pick and start playback on this device.
+          Tap a result to fill your pick and start playback on the host device.
         </div>
       )}
     </div>

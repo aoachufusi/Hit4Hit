@@ -19,6 +19,10 @@ import {
   playTrackUris,
   transferPlaybackToDevice,
 } from "./spotifyPlayer.js";
+import {
+  searchArtistsWithToken,
+  searchTracksWithToken,
+} from "./spotifyApi.js";
 
 function parseCallbackUrl() {
   const url = new URL(window.location.href);
@@ -27,13 +31,6 @@ function parseCallbackUrl() {
     code: url.searchParams.get("code"),
     error: url.searchParams.get("error"),
   };
-}
-
-/** Spotify GET /v1/search only allows limit in the range 1–10 (per API docs). */
-function clampSearchLimit(limit, fallback = 10) {
-  const x = Math.floor(Number(limit));
-  if (!Number.isFinite(x)) return Math.min(10, Math.max(1, fallback));
-  return Math.min(10, Math.max(1, x));
 }
 
 export function SpotifyProvider({ children }) {
@@ -165,26 +162,7 @@ export function SpotifyProvider({ children }) {
   const searchTracks = useCallback(
     async (q, limit = 8, opts = {}) => {
       const token = await getAccessToken();
-      const hint = opts.artistName?.trim();
-      const queryStr = hint
-        ? `${String(q).trim()} artist:${hint.replace(/"/g, "")}`
-        : String(q).trim();
-      const lim = clampSearchLimit(limit, 8);
-      const params = new URLSearchParams({
-        q: queryStr,
-        type: "track",
-        limit: String(lim),
-      });
-      const res = await fetch(
-        `https://api.spotify.com/v1/search?${params.toString()}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Search failed: ${res.status} ${text}`);
-      }
-      const data = await res.json();
-      return data.tracks?.items ?? [];
+      return searchTracksWithToken(token, q, limit, opts);
     },
     [getAccessToken]
   );
@@ -192,23 +170,7 @@ export function SpotifyProvider({ children }) {
   const searchArtists = useCallback(
     async (q, limit = 10) => {
       const token = await getAccessToken();
-      const lim = clampSearchLimit(limit, 10);
-      const params = new URLSearchParams({
-        q: String(q).trim(),
-        type: "artist",
-        limit: String(lim),
-        market: "US",
-      });
-      const res = await fetch(
-        `https://api.spotify.com/v1/search?${params.toString()}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Artist search failed: ${res.status} ${text}`);
-      }
-      const data = await res.json();
-      return data.artists?.items ?? [];
+      return searchArtistsWithToken(token, q, limit);
     },
     [getAccessToken]
   );

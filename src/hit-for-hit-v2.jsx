@@ -16,6 +16,12 @@ import { isFirebaseConfigured } from "./firebase/config.js";
 import { useSpotify } from "./useSpotify.js";
 import SpotifySongPicker from "./SpotifySongPicker.jsx";
 import { getInviteUrl } from "./appUrl.js";
+import { getStoredSession } from "./spotifyAuth.js";
+import {
+  isSharedSpotifyTokenValid,
+  searchArtistsWithToken,
+  searchTracksWithToken,
+} from "./spotifyApi.js";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 
@@ -213,82 +219,6 @@ export default function HitForHit() {
 
   const filtered1 = POPULAR_ARTISTS.filter(a => a1Filter && a.toLowerCase().includes(a1Filter.toLowerCase()));
   const filtered2 = POPULAR_ARTISTS.filter(a => a2Filter && a.toLowerCase().includes(a2Filter.toLowerCase()));
-
-  useEffect(() => {
-    if (!spotify.loggedIn) {
-      queueMicrotask(() => {
-        setA1SpotifyHits([]);
-        setA1SpotLoading(false);
-      });
-      return;
-    }
-    const q = a1Filter.trim();
-    if (q.length < 2) {
-      queueMicrotask(() => {
-        setA1SpotifyHits([]);
-        setA1SpotLoading(false);
-      });
-      return;
-    }
-    const tid = setTimeout(async () => {
-      const startEpoch = a1SearchEpochRef.current;
-      setA1SpotLoading(true);
-      try {
-        const items = await spotify.searchArtists(q, 10);
-        if (a1SearchEpochRef.current !== startEpoch) return;
-        setA1SpotifyHits(Array.isArray(items) ? items.filter((a) => a?.name) : []);
-      } catch (e) {
-        if (a1SearchEpochRef.current === startEpoch) {
-          setA1SpotifyHits([]);
-          showToast(String(e?.message || e));
-        }
-      } finally {
-        setA1SpotLoading(false);
-      }
-    }, 400);
-    return () => {
-      clearTimeout(tid);
-      a1SearchEpochRef.current += 1;
-    };
-  }, [a1Filter, spotify.loggedIn, spotify.searchArtists, showToast]);
-
-  useEffect(() => {
-    if (!spotify.loggedIn) {
-      queueMicrotask(() => {
-        setA2SpotifyHits([]);
-        setA2SpotLoading(false);
-      });
-      return;
-    }
-    const q = a2Filter.trim();
-    if (q.length < 2) {
-      queueMicrotask(() => {
-        setA2SpotifyHits([]);
-        setA2SpotLoading(false);
-      });
-      return;
-    }
-    const tid = setTimeout(async () => {
-      const startEpoch = a2SearchEpochRef.current;
-      setA2SpotLoading(true);
-      try {
-        const items = await spotify.searchArtists(q, 10);
-        if (a2SearchEpochRef.current !== startEpoch) return;
-        setA2SpotifyHits(Array.isArray(items) ? items.filter((a) => a?.name) : []);
-      } catch (e) {
-        if (a2SearchEpochRef.current === startEpoch) {
-          setA2SpotifyHits([]);
-          showToast(String(e?.message || e));
-        }
-      } finally {
-        setA2SpotLoading(false);
-      }
-    }, 400);
-    return () => {
-      clearTimeout(tid);
-      a2SearchEpochRef.current += 1;
-    };
-  }, [a2Filter, spotify.loggedIn, spotify.searchArtists, showToast]);
 
   const startListening = useCallback((code) => {
     if (unsubRef.current) unsubRef.current();
@@ -746,6 +676,153 @@ export default function HitForHit() {
   const isJudge   = Boolean(gs && myName && toArray(gs.judges).includes(myName));
   const isPlayer  = isPlayer1 || isPlayer2;
 
+  const canManageSpotify = isHost || screen === "create";
+  const spotifySearchReady =
+    (isHost && spotify.loggedIn) || isSharedSpotifyTokenValid(gs);
+
+  const getSpotifySearchToken = useCallback(async () => {
+    if (isHost && spotify.loggedIn) {
+      return spotify.getAccessToken();
+    }
+    if (isSharedSpotifyTokenValid(gs)) {
+      return gs.spotifyAccessToken;
+    }
+    throw new Error("Host must log in to Spotify for search");
+  }, [gs, isHost, spotify]);
+
+  const sharedSearchTracks = useCallback(
+    async (q, limit, opts) => {
+      const token = await getSpotifySearchToken();
+      return searchTracksWithToken(token, q, limit, opts);
+    },
+    [getSpotifySearchToken]
+  );
+
+  const hostSpotifyLogout = useCallback(async () => {
+    spotify.logout();
+    if (gs?.code && isHost) {
+      try {
+        await updateGame(gs.code, {
+          spotifyAccessToken: null,
+          spotifyTokenObtainedAt: null,
+          spotifyTokenExpiresIn: null,
+        });
+      } catch {
+        showToast("Could not clear shared Spotify access — try again.");
+      }
+    }
+  }, [gs?.code, isHost, spotify, showToast]);
+
+  useEffect(() => {
+    if (!isHost || !gs?.code || !spotify.loggedIn) return;
+
+    let cancelled = false;
+
+    const syncHostSpotifyToken = async () => {
+      try {
+        const token = await spotify.getAccessToken();
+        const session = getStoredSession();
+        if (!token || !session || cancelled) return;
+        await updateGame(gs.code, {
+          spotifyAccessToken: token,
+          spotifyTokenObtainedAt: session.obtained_at,
+          spotifyTokenExpiresIn: session.expires_in,
+        });
+      } catch (e) {
+        if (!cancelled) {
+          console.error("Failed to sync host Spotify token", e);
+        }
+      }
+    };
+
+    syncHostSpotifyToken();
+    const interval = setInterval(syncHostSpotifyToken, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isHost, gs?.code, spotify.loggedIn, spotify]);
+
+  useEffect(() => {
+    if (!spotifySearchReady) {
+      queueMicrotask(() => {
+        setA1SpotifyHits([]);
+        setA1SpotLoading(false);
+      });
+      return;
+    }
+    const q = a1Filter.trim();
+    if (q.length < 2) {
+      queueMicrotask(() => {
+        setA1SpotifyHits([]);
+        setA1SpotLoading(false);
+      });
+      return;
+    }
+    const tid = setTimeout(async () => {
+      const startEpoch = a1SearchEpochRef.current;
+      setA1SpotLoading(true);
+      try {
+        const token = await getSpotifySearchToken();
+        if (a1SearchEpochRef.current !== startEpoch) return;
+        const items = await searchArtistsWithToken(token, q, 10);
+        if (a1SearchEpochRef.current !== startEpoch) return;
+        setA1SpotifyHits(Array.isArray(items) ? items.filter((a) => a?.name) : []);
+      } catch (e) {
+        if (a1SearchEpochRef.current === startEpoch) {
+          setA1SpotifyHits([]);
+          showToast(String(e?.message || e));
+        }
+      } finally {
+        setA1SpotLoading(false);
+      }
+    }, 400);
+    return () => {
+      clearTimeout(tid);
+      a1SearchEpochRef.current += 1;
+    };
+  }, [a1Filter, spotifySearchReady, getSpotifySearchToken, showToast]);
+
+  useEffect(() => {
+    if (!spotifySearchReady) {
+      queueMicrotask(() => {
+        setA2SpotifyHits([]);
+        setA2SpotLoading(false);
+      });
+      return;
+    }
+    const q = a2Filter.trim();
+    if (q.length < 2) {
+      queueMicrotask(() => {
+        setA2SpotifyHits([]);
+        setA2SpotLoading(false);
+      });
+      return;
+    }
+    const tid = setTimeout(async () => {
+      const startEpoch = a2SearchEpochRef.current;
+      setA2SpotLoading(true);
+      try {
+        const token = await getSpotifySearchToken();
+        if (a2SearchEpochRef.current !== startEpoch) return;
+        const items = await searchArtistsWithToken(token, q, 10);
+        if (a2SearchEpochRef.current !== startEpoch) return;
+        setA2SpotifyHits(Array.isArray(items) ? items.filter((a) => a?.name) : []);
+      } catch (e) {
+        if (a2SearchEpochRef.current === startEpoch) {
+          setA2SpotifyHits([]);
+          showToast(String(e?.message || e));
+        }
+      } finally {
+        setA2SpotLoading(false);
+      }
+    }, 400);
+    return () => {
+      clearTimeout(tid);
+      a2SearchEpochRef.current += 1;
+    };
+  }, [a2Filter, spotifySearchReady, getSpotifySearchToken, showToast]);
+
   const members = gs ? toArray(gs.members) : [];
   const judges = gs ? toArray(gs.judges) : [];
   const roundHistory = gs ? toArray(gs.roundHistory) : [];
@@ -855,41 +932,47 @@ export default function HitForHit() {
             </span>
           )}
           <div style={{display:"flex",alignItems:"center",gap:6}}>
-            {spotify.loggedIn ? (
-              <>
-                <span className="bf" style={{fontSize:10,color:MUTED1}}>Spotify</span>
+            {canManageSpotify ? (
+              spotify.loggedIn ? (
+                <>
+                  <span className="bf" style={{fontSize:10,color:MUTED1}}>Spotify</span>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    style={{ padding: "4px 10px", fontSize: 11 }}
+                    onClick={() => hostSpotifyLogout()}
+                  >
+                    Log out
+                  </button>
+                </>
+              ) : (
                 <button
                   type="button"
                   className="btn-ghost"
                   style={{ padding: "4px 10px", fontSize: 11 }}
-                  onClick={() => spotify.logout()}
+                  onClick={async () => {
+                    try {
+                      saveAppRestore({
+                        screen,
+                        myName,
+                        myRole,
+                        joinCode,
+                        player1Name,
+                        gameCode: gs?.code || null,
+                      });
+                      await spotify.login();
+                    } catch (e) {
+                      showToast(String(e?.message || e));
+                    }
+                  }}
                 >
-                  Log out
+                  Spotify
                 </button>
-              </>
+              )
+            ) : spotifySearchReady ? (
+              <span className="bf" style={{fontSize:10,color:MUTED1}}>Spotify ✓</span>
             ) : (
-              <button
-                type="button"
-                className="btn-ghost"
-                style={{ padding: "4px 10px", fontSize: 11 }}
-                onClick={async () => {
-                  try {
-                    saveAppRestore({
-                      screen,
-                      myName,
-                      myRole,
-                      joinCode,
-                      player1Name,
-                      gameCode: gs?.code || null,
-                    });
-                    await spotify.login();
-                  } catch (e) {
-                    showToast(String(e?.message || e));
-                  }
-                }}
-              >
-                Spotify
-              </button>
+              <span className="bf" style={{fontSize:10,color:MUTED3}} title="Host logs in to Spotify for everyone">Spotify</span>
             )}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:4}} title="Game sync via Firebase Realtime Database">
@@ -1027,6 +1110,14 @@ export default function HitForHit() {
               </div>
             </div>
 
+            {isHost && !spotify.loggedIn && (
+              <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
+                <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
+                  Log in with Spotify above so everyone in the lobby can search artists and songs.
+                </div>
+              </div>
+            )}
+
             <div className="card" style={{padding:"1rem 1.25rem",marginBottom:10}}>
               <div className="hd" style={{fontSize:14,letterSpacing:".07em",color:MUTED2,marginBottom:8}}>IN THE LOBBY</div>
               <div className="bf" style={{color:MUTED1,fontSize:12,lineHeight:1.5,marginBottom:8}}>
@@ -1088,30 +1179,30 @@ export default function HitForHit() {
                           <div className="bf" style={{color:TEXT,fontSize:13,fontWeight:600}}>{name}</div>
                           {showPicker && i===0 ? (
                             <div style={{marginTop:6,position:"relative"}}>
-                              <input className="inp" style={{fontSize:12,padding:"6px 10px"}} placeholder={spotify.loggedIn?"Spotify or quick picks…":"Pick your artist"}
+                              <input className="inp" style={{fontSize:12,padding:"6px 10px"}} placeholder={spotifySearchReady?"Spotify or quick picks…":"Pick your artist"}
                                 value={a1Filter||artist1}
                                 onChange={e=>{setA1Filter(e.target.value);setArtist1("");setA1Open(true);}}
                                 onFocus={()=>setA1Open(true)} onBlur={()=>setTimeout(()=>setA1Open(false),160)}/>
                               {a1Open && (
                                 a1SpotLoading ||
                                 a1SpotifyHits.length > 0 ||
-                                (spotify.loggedIn && a1Filter.trim().length >= 2 && !a1SpotLoading) ||
-                                ((!spotify.loggedIn || a1Filter.trim().length < 2) && filtered1.length > 0)
+                                (spotifySearchReady && a1Filter.trim().length >= 2 && !a1SpotLoading) ||
+                                ((!spotifySearchReady || a1Filter.trim().length < 2) && filtered1.length > 0)
                               ) && (
                                 <div style={{position:"absolute",top:"100%",left:0,right:0,background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:6,overflow:"hidden",zIndex:10,maxHeight:150,overflowY:"auto"}}>
-                                  {spotify.loggedIn && a1Filter.trim().length>=2 && a1SpotLoading && (
+                                  {spotifySearchReady && a1Filter.trim().length>=2 && a1SpotLoading && (
                                     <div className="bf" style={{padding:"8px 12px",color:MUTED2,fontSize:11}}>Searching Spotify…</div>
                                   )}
-                                  {spotify.loggedIn && a1Filter.trim().length>=2 && !a1SpotLoading && a1SpotifyHits.map((a)=>(
+                                  {spotifySearchReady && a1Filter.trim().length>=2 && !a1SpotLoading && a1SpotifyHits.map((a)=>(
                                     <button key={a.id} type="button" className="sug" onMouseDown={()=>{setA1Filter(a.name);submitArtist1(a.name);setA1Open(false);}}>{a.name}</button>
                                   ))}
-                                  {spotify.loggedIn && a1Filter.trim().length>=2 && !a1SpotLoading && a1SpotifyHits.length===0 && (
+                                  {spotifySearchReady && a1Filter.trim().length>=2 && !a1SpotLoading && a1SpotifyHits.length===0 && (
                                     <div className="bf" style={{padding:"6px 12px",color:MUTED3,fontSize:11}}>No Spotify — quick picks:</div>
                                   )}
-                                  {spotify.loggedIn && a1Filter.trim().length>=2 && !a1SpotLoading && a1SpotifyHits.length===0 && filtered1.slice(0,4).map((a)=>(
+                                  {spotifySearchReady && a1Filter.trim().length>=2 && !a1SpotLoading && a1SpotifyHits.length===0 && filtered1.slice(0,4).map((a)=>(
                                     <button key={a} type="button" className="sug" onMouseDown={()=>{setA1Filter(a);submitArtist1(a);setA1Open(false);}}>{a}</button>
                                   ))}
-                                  {(!spotify.loggedIn||a1Filter.trim().length<2)&&filtered1.slice(0,5).map((a)=>(
+                                  {(!spotifySearchReady||a1Filter.trim().length<2)&&filtered1.slice(0,5).map((a)=>(
                                     <button key={a} type="button" className="sug" onMouseDown={()=>{setA1Filter(a);submitArtist1(a);setA1Open(false);}}>{a}</button>
                                   ))}
                                 </div>
@@ -1119,30 +1210,30 @@ export default function HitForHit() {
                             </div>
                           ) : showPicker && i===1 ? (
                             <div style={{marginTop:6,position:"relative"}}>
-                              <input className="inp" style={{fontSize:12,padding:"6px 10px"}} placeholder={spotify.loggedIn?"Spotify or quick picks…":"Pick your artist"}
+                              <input className="inp" style={{fontSize:12,padding:"6px 10px"}} placeholder={spotifySearchReady?"Spotify or quick picks…":"Pick your artist"}
                                 value={a2Filter||artist2}
                                 onChange={e=>{setA2Filter(e.target.value);setArtist2("");setA2Open(true);}}
                                 onFocus={()=>setA2Open(true)} onBlur={()=>setTimeout(()=>setA2Open(false),160)}/>
                               {a2Open && (
                                 a2SpotLoading ||
                                 a2SpotifyHits.length > 0 ||
-                                (spotify.loggedIn && a2Filter.trim().length >= 2 && !a2SpotLoading) ||
-                                ((!spotify.loggedIn || a2Filter.trim().length < 2) && filtered2.length > 0)
+                                (spotifySearchReady && a2Filter.trim().length >= 2 && !a2SpotLoading) ||
+                                ((!spotifySearchReady || a2Filter.trim().length < 2) && filtered2.length > 0)
                               ) && (
                                 <div style={{position:"absolute",top:"100%",left:0,right:0,background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:6,overflow:"hidden",zIndex:10,maxHeight:150,overflowY:"auto"}}>
-                                  {spotify.loggedIn && a2Filter.trim().length>=2 && a2SpotLoading && (
+                                  {spotifySearchReady && a2Filter.trim().length>=2 && a2SpotLoading && (
                                     <div className="bf" style={{padding:"8px 12px",color:MUTED2,fontSize:11}}>Searching Spotify…</div>
                                   )}
-                                  {spotify.loggedIn && a2Filter.trim().length>=2 && !a2SpotLoading && a2SpotifyHits.map((a)=>(
+                                  {spotifySearchReady && a2Filter.trim().length>=2 && !a2SpotLoading && a2SpotifyHits.map((a)=>(
                                     <button key={a.id} type="button" className="sug" onMouseDown={()=>{setA2Filter(a.name);submitArtist2(a.name);setA2Open(false);}}>{a.name}</button>
                                   ))}
-                                  {spotify.loggedIn && a2Filter.trim().length>=2 && !a2SpotLoading && a2SpotifyHits.length===0 && (
+                                  {spotifySearchReady && a2Filter.trim().length>=2 && !a2SpotLoading && a2SpotifyHits.length===0 && (
                                     <div className="bf" style={{padding:"6px 12px",color:MUTED3,fontSize:11}}>No Spotify — quick picks:</div>
                                   )}
-                                  {spotify.loggedIn && a2Filter.trim().length>=2 && !a2SpotLoading && a2SpotifyHits.length===0 && filtered2.slice(0,4).map((a)=>(
+                                  {spotifySearchReady && a2Filter.trim().length>=2 && !a2SpotLoading && a2SpotifyHits.length===0 && filtered2.slice(0,4).map((a)=>(
                                     <button key={a} type="button" className="sug" onMouseDown={()=>{setA2Filter(a);submitArtist2(a);setA2Open(false);}}>{a}</button>
                                   ))}
-                                  {(!spotify.loggedIn||a2Filter.trim().length<2)&&filtered2.slice(0,5).map((a)=>(
+                                  {(!spotifySearchReady||a2Filter.trim().length<2)&&filtered2.slice(0,5).map((a)=>(
                                     <button key={a} type="button" className="sug" onMouseDown={()=>{setA2Filter(a);submitArtist2(a);setA2Open(false);}}>{a}</button>
                                   ))}
                                 </div>
@@ -1257,6 +1348,11 @@ export default function HitForHit() {
                             disabled={songSubmitted}
                             onToast={showToast}
                             roundArtist={isPlayer1 ? gs.artist1 : gs.artist2}
+                            searchEnabled={spotifySearchReady}
+                            searchTracks={sharedSearchTracks}
+                            canPlay={isHost && Boolean(spotify.deviceId)}
+                            playUri={spotify.playUri}
+                            playerStatus={isHost ? spotify.playerStatus : ""}
                           />
                         </>
                       ) : (
