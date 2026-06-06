@@ -14,7 +14,6 @@ import {
 } from "./firebase/gameService.js";
 import { isFirebaseConfigured } from "./firebase/config.js";
 import { useSpotify } from "./useSpotify.js";
-import { useAppleMusic } from "./useAppleMusic.js";
 import SpotifySongPicker from "./SpotifySongPicker.jsx";
 import { getInviteUrl } from "./appUrl.js";
 import { getStoredSession } from "./spotifyAuth.js";
@@ -26,13 +25,16 @@ import {
 import {
   MUSIC_PROVIDERS,
   musicProviderLabel,
-  normalizeMusicProvider,
+  loadMyMusicProvider,
+  saveMyMusicProvider,
 } from "./musicConstants.js";
 import ArtistSearch from "./musickit/ArtistSearch.jsx";
+import MusicProviderPicker from "./musickit/MusicProviderPicker.jsx";
 import {
   authorizeHost,
   configureMusicKit,
   getDeveloperToken,
+  searchTracks as searchAppleTracks,
   unauthorizeHost,
 } from "./musickit/musickitService.js";
 
@@ -167,7 +169,6 @@ const CheckIcon = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="no
 
 export default function HitForHit() {
   const spotify = useSpotify();
-  const apple = useAppleMusic();
 
   // ── Local identity
   const [screen, setScreen]     = useState("home");
@@ -194,7 +195,7 @@ export default function HitForHit() {
   // ── Create form
   const [player1Name, setPlayer1Name] = useState("");
   const [rounds, setRounds]     = useState(5);
-  const [musicProvider, setMusicProvider] = useState(MUSIC_PROVIDERS.SPOTIFY);
+  const [myMusicProvider, setMyMusicProvider] = useState(loadMyMusicProvider);
   const [musicKitReady, setMusicKitReady] = useState(false);
   const [appleMusicConnected, setAppleMusicConnected] = useState(false);
   const [musicKitStatus, setMusicKitStatus] = useState("");
@@ -326,7 +327,6 @@ export default function HitForHit() {
       roundPunishment: "",
       finalPunishment: "",
       roundWinner: null,
-      musicProvider: normalizeMusicProvider(musicProvider),
       updatedAt: Date.now(),
     };
     try {
@@ -662,24 +662,24 @@ export default function HitForHit() {
   const isJudge   = Boolean(gs && myName && toArray(gs.judges).includes(myName));
   const isPlayer  = isPlayer1 || isPlayer2;
 
-  const activeMusicProvider = normalizeMusicProvider(gs?.musicProvider || musicProvider);
-  const musicLabel = musicProviderLabel(activeMusicProvider);
-  const usesAppleMusic = activeMusicProvider === MUSIC_PROVIDERS.APPLE;
+  const setMyMusicProviderPersist = useCallback((provider) => {
+    saveMyMusicProvider(provider);
+    setMyMusicProvider(provider);
+  }, []);
 
-  const canManageSpotify = (isHost || screen === "create") && !usesAppleMusic;
-  const canManageAppleMusic = (isHost || screen === "create") && usesAppleMusic;
-  const musicSearchReady = usesAppleMusic
+  const iUseAppleMusic =
+    musicKitReady && myMusicProvider === MUSIC_PROVIDERS.APPLE;
+  const myMusicLabel = musicProviderLabel(
+    iUseAppleMusic ? MUSIC_PROVIDERS.APPLE : MUSIC_PROVIDERS.SPOTIFY
+  );
+
+  const canManageSpotify = isHost || screen === "create";
+  const canManageAppleMusic = iUseAppleMusic;
+  const musicSearchReady = iUseAppleMusic
     ? musicKitReady
     : (isHost && spotify.loggedIn) || isSharedSpotifyTokenValid(gs);
 
   useEffect(() => {
-    if (!usesAppleMusic) {
-      setMusicKitReady(false);
-      setAppleMusicConnected(false);
-      setMusicKitStatus("");
-      return;
-    }
-
     let cancelled = false;
 
     (async () => {
@@ -704,7 +704,13 @@ export default function HitForHit() {
     return () => {
       cancelled = true;
     };
-  }, [usesAppleMusic]);
+  }, []);
+
+  useEffect(() => {
+    if (!musicKitReady && myMusicProvider === MUSIC_PROVIDERS.APPLE) {
+      setMyMusicProviderPersist(MUSIC_PROVIDERS.SPOTIFY);
+    }
+  }, [musicKitReady, myMusicProvider, setMyMusicProviderPersist]);
 
   const connectAppleMusic = useCallback(async () => {
     try {
@@ -755,13 +761,14 @@ export default function HitForHit() {
 
   const sharedSearchTracks = useCallback(
     async (q, limit, opts) => {
-      if (usesAppleMusic) {
-        return apple.searchTracks(q, limit, opts);
+      if (iUseAppleMusic) {
+        const tracks = await searchAppleTracks(q, opts?.artistName);
+        return tracks.slice(0, limit || 8);
       }
       const token = await getSpotifySearchToken();
       return searchTracksWithToken(token, q, limit, opts);
     },
-    [usesAppleMusic, apple, getSpotifySearchToken]
+    [iUseAppleMusic, getSpotifySearchToken]
   );
 
   const hostSpotifyLogout = useCallback(async () => {
@@ -780,7 +787,7 @@ export default function HitForHit() {
   }, [gs?.code, isHost, spotify, showToast]);
 
   useEffect(() => {
-    if (usesAppleMusic || !isHost || !gs?.code || !spotify.loggedIn) return;
+    if (!isHost || !gs?.code || !spotify.loggedIn) return;
 
     let cancelled = false;
 
@@ -807,7 +814,7 @@ export default function HitForHit() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [usesAppleMusic, isHost, gs?.code, spotify.loggedIn, spotify]);
+  }, [isHost, gs?.code, spotify.loggedIn, spotify]);
 
   const members = gs ? toArray(gs.members) : [];
   const judges = gs ? toArray(gs.judges) : [];
@@ -918,14 +925,22 @@ export default function HitForHit() {
             </span>
           )}
           <div style={{display:"flex",alignItems:"center",gap:6}}>
-            {usesAppleMusic ? (
+            {musicKitReady && screen !== "home" && (
+              <MusicProviderPicker
+                compact
+                value={myMusicProvider}
+                onChange={setMyMusicProviderPersist}
+                appleEnabled={musicKitReady}
+              />
+            )}
+            {iUseAppleMusic ? (
               !musicKitReady ? (
                 <span
                   className="bf"
                   style={{ fontSize: 10, color: MUTED3 }}
                   title={musicKitStatus || "Apple Music loading…"}
                 >
-                  {musicLabel}
+                  {myMusicLabel}
                 </span>
               ) : canManageAppleMusic && !appleMusicConnected ? (
                 <button
@@ -934,11 +949,11 @@ export default function HitForHit() {
                   style={{ padding: "4px 10px", fontSize: 11 }}
                   onClick={() => connectAppleMusic()}
                 >
-                  Connect {musicLabel}
+                  Connect {myMusicLabel}
                 </button>
               ) : canManageAppleMusic && appleMusicConnected ? (
                 <>
-                  <span className="bf" style={{ fontSize: 10, color: MUTED1 }}>{musicLabel}</span>
+                  <span className="bf" style={{ fontSize: 10, color: MUTED1 }}>{myMusicLabel}</span>
                   <button
                     type="button"
                     className="btn-ghost"
@@ -949,12 +964,12 @@ export default function HitForHit() {
                   </button>
                 </>
               ) : (
-                <span className="bf" style={{ fontSize: 10, color: MUTED1 }}>{musicLabel} ✓</span>
+                <span className="bf" style={{ fontSize: 10, color: MUTED1 }}>{myMusicLabel} ✓</span>
               )
             ) : canManageSpotify ? (
               spotify.loggedIn ? (
                 <>
-                  <span className="bf" style={{fontSize:10,color:MUTED1}}>{musicLabel}</span>
+                  <span className="bf" style={{fontSize:10,color:MUTED1}}>{myMusicLabel}</span>
                   <button
                     type="button"
                     className="btn-ghost"
@@ -985,13 +1000,13 @@ export default function HitForHit() {
                     }
                   }}
                 >
-                  {musicLabel}
+                  {myMusicLabel}
                 </button>
               )
             ) : musicSearchReady ? (
-              <span className="bf" style={{fontSize:10,color:MUTED1}}>{musicLabel} ✓</span>
+              <span className="bf" style={{fontSize:10,color:MUTED1}}>{myMusicLabel} ✓</span>
             ) : (
-              <span className="bf" style={{fontSize:10,color:MUTED3}} title="Host logs in to Spotify for everyone">{musicLabel}</span>
+              <span className="bf" style={{fontSize:10,color:MUTED3}} title="Host logs in to Spotify for Spotify search">{myMusicLabel}</span>
             )}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:4}} title="Game sync via Firebase Realtime Database">
@@ -1067,41 +1082,6 @@ export default function HitForHit() {
             </div>
 
             <div style={{marginBottom:"1.5rem"}}>
-              <div className="bf" style={{fontSize:11,color:MUTED2,letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>Music service</div>
-              <div style={{display:"flex",gap:8}}>
-                {[
-                  [MUSIC_PROVIDERS.SPOTIFY, "Spotify"],
-                  [MUSIC_PROVIDERS.APPLE, "Apple Music"],
-                ].map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setMusicProvider(value)}
-                    className="bf"
-                    style={{
-                      flex: 1,
-                      background: musicProvider === value ? C : SURFACE2,
-                      border: `1px solid ${musicProvider === value ? C : BORDER}`,
-                      borderRadius: 8,
-                      color: musicProvider === value ? "#fff" : MUTED1,
-                      cursor: "pointer",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      padding: "10px 12px",
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <div className="bf" style={{color:MUTED3,fontSize:11,marginTop:8,lineHeight:1.45}}>
-                {musicProvider === MUSIC_PROVIDERS.APPLE
-                  ? "Apple Music search works for everyone once the server is configured. Playback comes in a later update."
-                  : "Spotify: host logs in once so everyone can search artists and songs."}
-              </div>
-            </div>
-
-            <div style={{marginBottom:"1.5rem"}}>
               <div className="bf" style={{fontSize:11,color:MUTED2,letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>Rounds (max 12)</div>
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                 {[1,2,3,4,5,6,7,8,9,10,11,12].map((r)=>(
@@ -1164,23 +1144,38 @@ export default function HitForHit() {
               </div>
             </div>
 
-            {isHost && !usesAppleMusic && !spotify.loggedIn && (
+            {isHost && !iUseAppleMusic && !spotify.loggedIn && (
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
                 <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
-                  Log in with Spotify above so everyone in the lobby can search artists and songs.
+                  Log in with Spotify above so players who choose Spotify can search artists and songs.
                 </div>
               </div>
             )}
 
-            {isHost && usesAppleMusic && musicKitReady && !appleMusicConnected && (
-              <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
-                <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
-                  Connect Apple Music above for playback. Everyone can search artists once MusicKit loads.
+            {musicKitReady && myName && (
+              <div className="card" style={{padding:"1rem 1.25rem",marginBottom:10}}>
+                <MusicProviderPicker
+                  value={myMusicProvider}
+                  onChange={setMyMusicProviderPersist}
+                  appleEnabled={musicKitReady}
+                />
+                <div className="bf" style={{color:MUTED3,fontSize:11,marginTop:8,lineHeight:1.45}}>
+                  {iUseAppleMusic
+                    ? "You’re using Apple Music for search on this device."
+                    : "You’re using Spotify for search. Host must log in if you’re not the host."}
                 </div>
               </div>
             )}
 
-            {usesAppleMusic && !musicKitReady && musicKitStatus && (
+            {iUseAppleMusic && musicKitReady && !appleMusicConnected && (
+              <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
+                <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
+                  Connect Apple Music above for previews and playback on your device.
+                </div>
+              </div>
+            )}
+
+            {!musicKitReady && musicKitStatus && (
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#f8717144"}}>
                 <div className="bf" style={{color:"#f87171",fontSize:12,lineHeight:1.5}}>
                   Apple Music unavailable: {musicKitStatus}
@@ -1251,13 +1246,13 @@ export default function HitForHit() {
                             <ArtistSearch
                               placeholder="Pick your artist"
                               searchReady={musicSearchReady}
-                              usesAppleMusic={usesAppleMusic}
+                              usesAppleMusic={iUseAppleMusic}
                               musicKitReady={musicKitReady}
-                              musicLabel={musicLabel}
+                              musicLabel={myMusicLabel}
                               onSelect={i === 0 ? submitArtist1 : submitArtist2}
                               onToast={showToast}
                               searchSpotifyArtists={
-                                usesAppleMusic ? undefined : searchSpotifyArtists
+                                iUseAppleMusic ? undefined : searchSpotifyArtists
                               }
                             />
                           ) : (
@@ -1371,10 +1366,10 @@ export default function HitForHit() {
                             roundArtist={isPlayer1 ? gs.artist1 : gs.artist2}
                             searchEnabled={musicSearchReady}
                             searchTracks={sharedSearchTracks}
-                            canPlay={!usesAppleMusic && isHost && Boolean(spotify.deviceId)}
+                            canPlay={!iUseAppleMusic && isHost && Boolean(spotify.deviceId)}
                             playUri={spotify.playUri}
-                            playerStatus={!usesAppleMusic && isHost ? spotify.playerStatus : ""}
-                            providerLabel={musicLabel}
+                            playerStatus={!iUseAppleMusic && isHost ? spotify.playerStatus : ""}
+                            providerLabel={myMusicLabel}
                           />
                         </>
                       ) : (

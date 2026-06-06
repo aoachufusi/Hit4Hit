@@ -78,6 +78,28 @@ export async function searchArtists(query) {
   })) || [];
 }
 
+// ── Search songs by name (optional artist hint)
+export async function searchTracks(query, artistName) {
+  const music = MusicKit.getInstance();
+  const term = artistName?.trim()
+    ? `${String(query).trim()} ${artistName.trim()}`
+    : String(query).trim();
+  const results = await music.api.music(`/v1/catalog/us/search`, {
+    term,
+    types: "songs",
+    limit: 8,
+  });
+  return (
+    results.data.results.songs?.data.map((t) => ({
+      id: t.id,
+      name: t.attributes.name,
+      uri: t.id,
+      preview: t.attributes.previews?.[0]?.url,
+      artists: [{ name: t.attributes.artistName || "Unknown artist" }],
+    })) || []
+  );
+}
+
 // ── Get top 10 songs for a given artist ID
 export async function getArtistTopSongs(artistId) {
   const music   = MusicKit.getInstance();
