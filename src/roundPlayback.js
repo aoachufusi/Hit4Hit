@@ -26,7 +26,7 @@ export async function resolveTrackForPlayback(meta, label, artist, deps) {
   if (!query || !artist) return meta ?? null;
 
   try {
-    if (deps.iUseAppleMusic) {
+    if (deps.usesAppleMusic) {
       const tracks = await searchAppleTracks(query, artist);
       return buildTrackMeta(tracks[0], MUSIC_PROVIDERS.APPLE) ?? meta ?? null;
     }

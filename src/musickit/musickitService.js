@@ -67,53 +67,113 @@ export async function unauthorizeHost() {
   await music.unauthorize();
 }
 
-// ── Search artists by name
-export async function searchArtists(query) {
-  const music   = MusicKit.getInstance();
-  const results = await music.api.music(
-    `/v1/catalog/us/search`,
-    { term: query, types: "artists", limit: 8 }
+// ── Internal helper — Apple artwork URLs use {w}x{h} placeholders
+function formatArtworkUrl(artwork, size) {
+  return artwork.url
+    .replace("{w}", size)
+    .replace("{h}", size);
+}
+
+async function proxyCatalogSearch(term, types, limit) {
+  const params = new URLSearchParams({
+    term: String(term).trim(),
+    types,
+    limit: String(limit),
+  });
+  const res = await fetch(`/api/apple-music/search?${params.toString()}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || `Apple Music search failed (${res.status})`);
+  }
+  return body;
+}
+
+function musicKitConfigured() {
+  try {
+    return Boolean(typeof window !== "undefined" && window.MusicKit?.getInstance());
+  } catch {
+    return false;
+  }
+}
+
+async function searchArtistsWithMusicKit(query) {
+  const music = MusicKit.getInstance();
+  const results = await music.api.music(`/v1/catalog/us/search`, {
+    term: query,
+    types: "artists",
+    limit: 8,
+  });
+  return (
+    results.data.results.artists?.data.map((a) => ({
+      id: a.id,
+      name: a.attributes.name,
+      image: a.attributes.artwork
+        ? formatArtworkUrl(a.attributes.artwork, 200)
+        : null,
+      genres: a.attributes.genreNames,
+    })) || []
   );
-  return results.data.results.artists?.data.map(a => ({
-    id:     a.id,
-    name:   a.attributes.name,
-    image:  a.attributes.artwork
-              ? formatArtworkUrl(a.attributes.artwork, 200)
-              : null,
-    genres: a.attributes.genreNames,
-  })) || [];
+}
+
+async function searchArtistsViaProxy(query) {
+  const body = await proxyCatalogSearch(query, "artists", 8);
+  return (
+    body.results?.artists?.data?.map((a) => ({
+      id: a.id,
+      name: a.attributes.name,
+      image: a.attributes.artwork
+        ? formatArtworkUrl(a.attributes.artwork, 200)
+        : null,
+      genres: a.attributes.genreNames,
+    })) || []
+  );
 }
 
 const appleArtistCache = new Map();
+
+async function loadArtistsForName(artistName) {
+  if (musicKitConfigured()) {
+    try {
+      return await searchArtistsWithMusicKit(artistName);
+    } catch (e) {
+      console.warn("MusicKit artist lookup failed, using proxy", e);
+    }
+  }
+  return searchArtistsViaProxy(artistName);
+}
 
 export async function findArtistByName(artistName) {
   const key = normalizeArtistName(artistName);
   if (!key) return null;
   if (appleArtistCache.has(key)) return appleArtistCache.get(key);
 
-  const artists = await searchArtists(artistName);
+  const artists = await loadArtistsForName(artistName);
   const match = pickBestArtistMatch(artists, artistName);
   if (match) appleArtistCache.set(key, match);
   return match || null;
 }
 
-// ── Search songs by name — results limited to the given artist
-export async function searchTracks(query, artistName) {
+// ── Search artists by name (MusicKit with server proxy fallback)
+export async function searchArtists(query) {
+  if (musicKitConfigured()) {
+    try {
+      return await searchArtistsWithMusicKit(query);
+    } catch (e) {
+      console.warn("MusicKit artist search failed, using proxy", e);
+    }
+  }
+  return searchArtistsViaProxy(query);
+}
+
+async function searchTracksViaProxy(query, artistName) {
   const artist = await findArtistByName(artistName);
   if (!artist) return [];
 
-  const music = MusicKit.getInstance();
-  const term = String(query).trim();
-  const results = await music.api.music(`/v1/catalog/us/search`, {
-    term: `${term} ${artist.name}`,
-    types: "songs",
-    limit: 25,
-  });
+  const term = `${String(query).trim()} ${artist.name}`;
+  const body = await proxyCatalogSearch(term, "songs", 25);
   return (
-    results.data.results.songs?.data
-      .filter((t) =>
-        appleTrackByArtist(t.attributes.artistName, artist.name)
-      )
+    body.results?.songs?.data
+      ?.filter((t) => appleTrackByArtist(t.attributes.artistName, artist.name))
       .slice(0, 8)
       .map((t) => ({
         id: t.id,
@@ -123,6 +183,42 @@ export async function searchTracks(query, artistName) {
         artists: [{ name: t.attributes.artistName || artist.name }],
       })) || []
   );
+}
+
+// ── Search songs by name — results limited to the given artist
+export async function searchTracks(query, artistName) {
+  const artist = await findArtistByName(artistName);
+  if (!artist) return [];
+
+  if (musicKitConfigured()) {
+    try {
+      const music = MusicKit.getInstance();
+      const term = String(query).trim();
+      const results = await music.api.music(`/v1/catalog/us/search`, {
+        term: `${term} ${artist.name}`,
+        types: "songs",
+        limit: 25,
+      });
+      return (
+        results.data.results.songs?.data
+          .filter((t) =>
+            appleTrackByArtist(t.attributes.artistName, artist.name)
+          )
+          .slice(0, 8)
+          .map((t) => ({
+            id: t.id,
+            name: t.attributes.name,
+            uri: t.id,
+            preview: t.attributes.previews?.[0]?.url,
+            artists: [{ name: t.attributes.artistName || artist.name }],
+          })) || []
+      );
+    } catch (e) {
+      console.warn("MusicKit track search failed, using proxy", e);
+    }
+  }
+
+  return searchTracksViaProxy(query, artistName);
 }
 
 // ── Get top 10 songs for a given artist ID
@@ -158,11 +254,4 @@ export function stopPreview(audio) {
     audio.pause();
     audio.currentTime = 0;
   }
-}
-
-// ── Internal helper — Apple artwork URLs use {w}x{h} placeholders
-function formatArtworkUrl(artwork, size) {
-  return artwork.url
-    .replace("{w}", size)
-    .replace("{h}", size);
 }

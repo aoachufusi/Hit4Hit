@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { searchTracks as searchAppleTracks } from "./musickitService.js";
+import {
+  SEARCH_INPUT_IOS_STYLE,
+  SEARCH_RESULT_BUTTON_STYLE,
+  useSearchDropdown,
+} from "./searchDropdownUtils.js";
 
 const BORDER = "#2e1f4a";
 const SURFACE2 = "#160f25";
@@ -30,8 +35,9 @@ export default function SongSearch({
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const searchEpochRef = useRef(0);
+  const { handleInputBlur, pickFromDropdown } = useSearchDropdown();
 
-  const canSearch = (usesAppleMusic ? musicKitReady : searchReady) && Boolean(roundArtist?.trim());
+  const canSearch = searchReady && Boolean(roundArtist?.trim());
   const trimmed = value.trim();
 
   useEffect(() => {
@@ -76,7 +82,7 @@ export default function SongSearch({
       (canSearch && trimmed.length >= 2) ||
       (!canSearch && trimmed.length > 0));
 
-  async function pickTrack(track) {
+  function pickTrack(track) {
     const label = formatTrackLabel(track);
     onChange?.(label);
     onSelectTrack?.(track);
@@ -84,10 +90,14 @@ export default function SongSearch({
   }
 
   return (
-    <div style={{ position: "relative" }}>
+    <div style={{ position: "relative", zIndex: open ? 20 : undefined }}>
       <input
         className="inp"
-        style={{ fontSize: 12, padding: "8px 10px", opacity: disabled ? 0.45 : 1 }}
+        style={{
+          ...SEARCH_INPUT_IOS_STYLE,
+          padding: "8px 10px",
+          opacity: disabled ? 0.45 : 1,
+        }}
         placeholder={
           canSearch
             ? roundArtist
@@ -102,7 +112,7 @@ export default function SongSearch({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 160)}
+        onBlur={() => handleInputBlur(setOpen)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && trimmed) onEnter?.();
         }}
@@ -119,16 +129,19 @@ export default function SongSearch({
             border: `1px solid ${BORDER}`,
             borderRadius: 6,
             overflow: "hidden",
-            zIndex: 10,
+            zIndex: 1000,
             maxHeight: 200,
             overflowY: "auto",
+            WebkitOverflowScrolling: "touch",
             marginTop: 4,
           }}
         >
           {!canSearch && (
             <div className="bf" style={{ padding: "8px 12px", color: MUTED3, fontSize: 11 }}>
               {usesAppleMusic
-                ? "Waiting for Apple Music to connect…"
+                ? musicKitReady
+                  ? "Waiting for Apple Music to connect…"
+                  : "Waiting for Apple Music search…"
                 : `Waiting for host to log in to ${musicLabel}…`}
             </div>
           )}
@@ -158,8 +171,12 @@ export default function SongSearch({
                 key={track.id || `${track.name}-${track.artists?.[0]?.name}`}
                 type="button"
                 className="sug"
-                onMouseDown={() => pickTrack(track)}
-                style={{ textAlign: "left" }}
+                onPointerDown={(e) => pickFromDropdown(e, () => pickTrack(track))}
+                style={{
+                  ...SEARCH_RESULT_BUTTON_STYLE,
+                  textAlign: "left",
+                  width: "100%",
+                }}
               >
                 <span className="bf" style={{ color: "#e9d5ff", fontWeight: 600 }}>
                   {track.name}

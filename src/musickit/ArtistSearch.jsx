@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { searchArtists as searchAppleArtists } from "./musickitService.js";
+import {
+  SEARCH_INPUT_IOS_STYLE,
+  SEARCH_RESULT_BUTTON_STYLE,
+  useSearchDropdown,
+} from "./searchDropdownUtils.js";
 
 const BORDER = "#2e1f4a";
 const SURFACE2 = "#160f25";
@@ -22,8 +27,9 @@ export default function ArtistSearch({
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const searchEpochRef = useRef(0);
+  const { handleInputBlur, pickFromDropdown } = useSearchDropdown();
 
-  const canSearch = usesAppleMusic ? musicKitReady : searchReady;
+  const canSearch = searchReady;
   const trimmed = query.trim();
 
   useEffect(() => {
@@ -68,11 +74,21 @@ export default function ArtistSearch({
       (canSearch && trimmed.length >= 2) ||
       (!canSearch && trimmed.length > 0));
 
+  function selectArtist(artist) {
+    setQuery(artist.name);
+    onSelect?.(artist.name);
+    setOpen(false);
+  }
+
   return (
-    <div style={{ marginTop: 6, position: "relative" }}>
+    <div style={{ marginTop: 6, position: "relative", zIndex: open ? 20 : undefined }}>
       <input
         className="inp"
-        style={{ fontSize: 12, padding: "6px 10px", opacity: disabled ? 0.45 : 1 }}
+        style={{
+          ...SEARCH_INPUT_IOS_STYLE,
+          padding: "6px 10px",
+          opacity: disabled ? 0.45 : 1,
+        }}
         placeholder={canSearch ? `${musicLabel} search…` : placeholder}
         value={query}
         disabled={disabled}
@@ -81,7 +97,7 @@ export default function ArtistSearch({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 160)}
+        onBlur={() => handleInputBlur(setOpen)}
       />
 
       {showDropdown && (
@@ -95,15 +111,19 @@ export default function ArtistSearch({
             border: `1px solid ${BORDER}`,
             borderRadius: 6,
             overflow: "hidden",
-            zIndex: 10,
+            zIndex: 1000,
             maxHeight: 180,
             overflowY: "auto",
+            WebkitOverflowScrolling: "touch",
+            marginTop: 4,
           }}
         >
           {!canSearch && (
             <div className="bf" style={{ padding: "8px 12px", color: MUTED3, fontSize: 11 }}>
               {usesAppleMusic
-                ? "Waiting for Apple Music to connect…"
+                ? musicKitReady
+                  ? "Waiting for Apple Music to connect…"
+                  : "Waiting for Apple Music search…"
                 : `Waiting for host to log in to ${musicLabel}…`}
             </div>
           )}
@@ -133,12 +153,14 @@ export default function ArtistSearch({
                 key={artist.id || artist.name}
                 type="button"
                 className="sug"
-                onMouseDown={() => {
-                  setQuery(artist.name);
-                  onSelect?.(artist.name);
-                  setOpen(false);
+                onPointerDown={(e) => pickFromDropdown(e, () => selectArtist(artist))}
+                style={{
+                  ...SEARCH_RESULT_BUTTON_STYLE,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  width: "100%",
                 }}
-                style={{ display: "flex", alignItems: "center", gap: 8 }}
               >
                 {artist.image ? (
                   <img

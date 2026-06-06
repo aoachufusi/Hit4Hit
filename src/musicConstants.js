@@ -13,26 +13,6 @@ export function musicProviderLabel(provider) {
   return provider === MUSIC_PROVIDERS.APPLE ? "Apple Music" : "Spotify";
 }
 
-export const MY_MUSIC_PROVIDER_KEY = "h4h:myMusicProvider";
-
-export function loadMyMusicProvider() {
-  try {
-    const stored = sessionStorage.getItem(MY_MUSIC_PROVIDER_KEY);
-    if (stored) return normalizeMusicProvider(stored);
-  } catch {
-    /* ignore */
-  }
-  return MUSIC_PROVIDERS.SPOTIFY;
-}
-
-export function saveMyMusicProvider(provider) {
-  try {
-    sessionStorage.setItem(MY_MUSIC_PROVIDER_KEY, normalizeMusicProvider(provider));
-  } catch {
-    /* ignore */
-  }
-}
-
 /** Normalize MusicKit catalog artists to match Spotify search shape. */
 export function normalizeAppleArtists(results) {
   const data = results?.artists?.data ?? results?.artists ?? [];
