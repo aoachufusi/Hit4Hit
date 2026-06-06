@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isArtistBlocked } from "../gameStateUtils.js";
 import { searchArtists as searchAppleArtists } from "./musickitService.js";
 import {
   SEARCH_INPUT_IOS_STYLE,
@@ -18,6 +19,7 @@ export default function ArtistSearch({
   usesAppleMusic = false,
   musicKitReady = false,
   musicLabel = "Spotify",
+  blockedArtists = [],
   onSelect,
   onToast,
   searchSpotifyArtists,
@@ -75,6 +77,10 @@ export default function ArtistSearch({
       (!canSearch && trimmed.length > 0));
 
   function selectArtist(artist) {
+    if (isArtistBlocked(artist.name, blockedArtists)) {
+      onToast?.("That artist is already taken — pick someone else");
+      return;
+    }
     setQuery(artist.name);
     onSelect?.(artist.name);
     setOpen(false);
@@ -148,18 +154,30 @@ export default function ArtistSearch({
 
           {canSearch &&
             !loading &&
-            results.map((artist) => (
+            results.map((artist) => {
+              const taken = isArtistBlocked(artist.name, blockedArtists);
+              return (
               <button
                 key={artist.id || artist.name}
                 type="button"
                 className="sug"
-                onPointerDown={(e) => pickFromDropdown(e, () => selectArtist(artist))}
+                disabled={taken}
+                onPointerDown={(e) => {
+                  if (taken) {
+                    e.preventDefault();
+                    onToast?.("That artist is already taken — pick someone else");
+                    return;
+                  }
+                  pickFromDropdown(e, () => selectArtist(artist));
+                }}
                 style={{
                   ...SEARCH_RESULT_BUTTON_STYLE,
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
                   width: "100%",
+                  opacity: taken ? 0.45 : 1,
+                  cursor: taken ? "not-allowed" : "pointer",
                 }}
               >
                 {artist.image ? (
@@ -171,9 +189,13 @@ export default function ArtistSearch({
                     style={{ borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
                   />
                 ) : null}
-                <span>{artist.name}</span>
+                <span style={{ flex: 1 }}>{artist.name}</span>
+                {taken && (
+                  <span className="bf" style={{ color: MUTED3, fontSize: 10 }}>taken</span>
+                )}
               </button>
-            ))}
+              );
+            })}
         </div>
       )}
     </div>

@@ -101,3 +101,45 @@ export function roundPointsLabel(entry) {
   const pts = entry.points || (entry.winner === 0 ? [2, 0] : [0, 2]);
   return `+${pts[0]} / +${pts[1]}`;
 }
+
+function extractSongTitle(label) {
+  const s = String(label || "").trim();
+  const idx = s.indexOf(" — ");
+  return idx >= 0 ? s.slice(0, idx).trim() : s;
+}
+
+/** Stable key for deduping songs across rounds (prefers track id). */
+export function normalizeSongKey(label, meta) {
+  if (meta?.id) {
+    return `id:${meta.provider || ""}:${meta.id}`;
+  }
+  const title = extractSongTitle(label).toLowerCase().replace(/\s+/g, " ").trim();
+  return title ? `title:${title}` : "";
+}
+
+export function getPlayerUsedSongKeys(roundHistory, playerIndex) {
+  const keys = new Set();
+  for (const entry of toArray(roundHistory)) {
+    const label = playerIndex === 0 ? entry.song1 : entry.song2;
+    const meta = playerIndex === 0 ? entry.song1Meta : entry.song2Meta;
+    const key = normalizeSongKey(label, meta);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+export function isSongAlreadyUsed(label, meta, roundHistory, playerIndex) {
+  const key = normalizeSongKey(label, meta);
+  if (!key) return false;
+  return getPlayerUsedSongKeys(roundHistory, playerIndex).has(key);
+}
+
+export function artistsMatch(a, b) {
+  if (!a || !b) return false;
+  return normalizeName(a).toLowerCase() === normalizeName(b).toLowerCase();
+}
+
+export function isArtistBlocked(name, blockedArtists) {
+  if (!name) return false;
+  return toArray(blockedArtists).some((blocked) => artistsMatch(name, blocked));
+}

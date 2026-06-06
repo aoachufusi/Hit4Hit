@@ -30,6 +30,8 @@ export default function SongSearch({
   onToast,
   searchSpotifyTracks,
   onEnter,
+  usedSongKeys,
+  songKeyForTrack,
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -82,7 +84,17 @@ export default function SongSearch({
       (canSearch && trimmed.length >= 2) ||
       (!canSearch && trimmed.length > 0));
 
+  function isTrackUsed(track) {
+    if (!usedSongKeys?.size || !songKeyForTrack) return false;
+    const key = songKeyForTrack(track);
+    return key ? usedSongKeys.has(key) : false;
+  }
+
   function pickTrack(track) {
+    if (isTrackUsed(track)) {
+      onToast?.("You already played that song in an earlier round — pick something else");
+      return;
+    }
     const label = formatTrackLabel(track);
     onChange?.(label);
     onSelectTrack?.(track);
@@ -166,27 +178,41 @@ export default function SongSearch({
 
           {canSearch &&
             !loading &&
-            results.map((track) => (
+            results.map((track) => {
+              const used = isTrackUsed(track);
+              return (
               <button
                 key={track.id || `${track.name}-${track.artists?.[0]?.name}`}
                 type="button"
                 className="sug"
-                onPointerDown={(e) => pickFromDropdown(e, () => pickTrack(track))}
+                disabled={used}
+                onPointerDown={(e) => {
+                  if (used) {
+                    e.preventDefault();
+                    onToast?.("You already played that song in an earlier round — pick something else");
+                    return;
+                  }
+                  pickFromDropdown(e, () => pickTrack(track));
+                }}
                 style={{
                   ...SEARCH_RESULT_BUTTON_STYLE,
                   textAlign: "left",
                   width: "100%",
+                  opacity: used ? 0.45 : 1,
+                  cursor: used ? "not-allowed" : "pointer",
                 }}
               >
-                <span className="bf" style={{ color: "#e9d5ff", fontWeight: 600 }}>
+                <span className="bf" style={{ color: used ? MUTED3 : "#e9d5ff", fontWeight: 600 }}>
                   {track.name}
                 </span>
                 <span className="bf" style={{ color: MUTED2, fontSize: 11 }}>
                   {" "}
                   — {track.artists?.map((a) => a.name).join(", ") || "Unknown artist"}
+                  {used ? " · already played" : ""}
                 </span>
               </button>
-            ))}
+              );
+            })}
         </div>
       )}
     </div>

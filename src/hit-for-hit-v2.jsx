@@ -8,6 +8,11 @@ import {
   namesMatch,
   computeRoundPoints,
   roundPointsLabel,
+  normalizeSongKey,
+  getPlayerUsedSongKeys,
+  isSongAlreadyUsed,
+  artistsMatch,
+  isArtistBlocked,
 } from "./gameStateUtils.js";
 import {
   createGame as firebaseCreateGame,
@@ -166,6 +171,32 @@ function countAnonymousVotes(votes) {
     else if (val === 1 || val === "1") v1++;
   }
   return { v0, v1, total: v0 + v1 };
+}
+
+/** Song title stays hidden until that pick's turn to play (or after). */
+function isSongRevealed(gs, index) {
+  if (!gs) return false;
+  const idx = gs.playbackIndex ?? 0;
+  if (gs.phase === PHASES.PLAYING || gs.phase === PHASES.LOBBY) return false;
+  if (gs.phase === PHASES.LISTENING) return idx >= index;
+  if (
+    gs.phase === PHASES.JUDGING ||
+    gs.phase === PHASES.RESULT ||
+    gs.phase === PHASES.FINAL
+  ) {
+    return idx >= 2 || idx > index;
+  }
+  return false;
+}
+
+function hiddenSongLabel(name) {
+  return `${playerLabel(name)}'s Pick Is In!`;
+}
+
+function songDisplayTitle(gs, index, players) {
+  const title = index === 0 ? gs.song1 : gs.song2;
+  if (isSongRevealed(gs, index)) return title;
+  return hiddenSongLabel(players[index]);
 }
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
@@ -440,11 +471,19 @@ export default function HitForHit() {
   // ── SET ARTISTS (in lobby) ───────────────────────────────────────────────
   const submitArtist1 = async (val) => {
     if (!gs) return;
+    if (gs.artist2 && artistsMatch(val, gs.artist2)) {
+      showToast("Pick a different artist — Player 2 already chose that one");
+      return;
+    }
     try { await updateGame(gs.code, { artist1: val }); } catch { showToast("Failed to save artist — try again"); }
   };
 
   const submitArtist2 = async (val) => {
     if (!gs) return;
+    if (gs.artist1 && artistsMatch(val, gs.artist1)) {
+      showToast("Pick a different artist — Player 1 already chose that one");
+      return;
+    }
     try { await updateGame(gs.code, { artist2: val }); } catch { showToast("Failed to save artist — try again"); }
   };
 
@@ -495,6 +534,10 @@ export default function HitForHit() {
   // ── START GAME (host only) ───────────────────────────────────────────────
   const startGame = async () => {
     if (!gs?.player1 || !gs?.player2 || !gs.artist1 || !gs.artist2) return;
+    if (artistsMatch(gs.artist1, gs.artist2)) {
+      showToast("Both players need different artists — update picks in the lobby");
+      return;
+    }
     try {
       await updateGame(gs.code, { phase: PHASES.PLAYING });
     } catch {
@@ -506,6 +549,11 @@ export default function HitForHit() {
   const submitSong = async () => {
     if (!mySong.trim() || !gs) return;
     const isP1 = myName === gs.player1;
+    const playerIdx = isP1 ? 0 : 1;
+    if (isSongAlreadyUsed(mySong.trim(), myTrackMeta, gs.roundHistory, playerIdx)) {
+      showToast("You already played that song in an earlier round — pick something else");
+      return;
+    }
     const patch = isP1
       ? { song1: mySong.trim(), p1Ready: true, song1Meta: myTrackMeta || null }
       : { song2: mySong.trim(), p2Ready: true, song2Meta: myTrackMeta || null };
@@ -632,6 +680,8 @@ export default function HitForHit() {
       round: gs.currentRound,
       song1: gs.song1,
       song2: gs.song2,
+      song1Meta: gs.song1Meta || null,
+      song2Meta: gs.song2Meta || null,
       winner,
       tied,
       points,
@@ -991,6 +1041,11 @@ export default function HitForHit() {
   const judges = gs ? getActiveJudges(gs) : [];
   const roundHistory = gs ? toArray(gs.roundHistory) : [];
   const scores = gs ? toArray(gs.scores) : [0, 0];
+  const myUsedSongKeys = isPlayer1
+    ? getPlayerUsedSongKeys(roundHistory, 0)
+    : isPlayer2
+      ? getPlayerUsedSongKeys(roundHistory, 1)
+      : new Set();
 
   const votes       = gs?.judgeVotes || {};
   const judgeNames  = gs ? getActiveJudges(gs) : [];
@@ -1444,6 +1499,7 @@ export default function HitForHit() {
                               usesAppleMusic={usesAppleMusic}
                               musicKitReady={musicKitReady}
                               musicLabel={musicLabel}
+                              blockedArtists={i === 0 ? (gs.artist2 ? [gs.artist2] : []) : (gs.artist1 ? [gs.artist1] : [])}
                               onSelect={i === 0 ? submitArtist1 : submitArtist2}
                               onToast={showToast}
                               searchSpotifyArtists={
@@ -1515,13 +1571,13 @@ export default function HitForHit() {
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:8,alignItems:"center",marginBottom:10}}>
                   {[0,1].map(i=>(
-                    <div key={i} style={{textAlign:i===0?"left":"right"}}>
+                    <div key={i} style={{textAlign:i===0?"left":"right",gridColumn:i===0?1:3}}>
                       <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[i]}}>{players[i].toUpperCase()}</div>
                       <div className="bf" style={{color:MUTED3,fontSize:10}}>{i===0?gs.artist1:gs.artist2}</div>
                       <div className="hd" style={{fontSize:40,color:COLORS[i],lineHeight:1}}>{scores[i] ?? 0}</div>
                     </div>
                   ))}
-                  <div className="hd" style={{color:MUTED3,fontSize:16,textAlign:"center"}}>VS</div>
+                  <div className="hd" style={{color:MUTED3,fontSize:16,textAlign:"center",gridColumn:2,gridRow:1}}>VS</div>
                 </div>
                 {(() => {
                   const s0 = scores[0] ?? 0;
@@ -1599,8 +1655,20 @@ export default function HitForHit() {
                             searchSpotifyTracks={searchSpotifyTracks}
                             onToast={showToast}
                             onEnter={submitSong}
+                            usedSongKeys={myUsedSongKeys}
+                            songKeyForTrack={(track) =>
+                              normalizeSongKey(
+                                `${track.name} — ${track.artists?.map((a) => a.name).join(", ") || ""}`,
+                                buildTrackMeta(track, activeMusicProvider)
+                              )
+                            }
                             placeholder={`Best ${isPlayer1 ? gs.artist1 : gs.artist2} hit…`}
                           />
+                          {myUsedSongKeys.size > 0 && (
+                            <div className="bf" style={{color:MUTED3,fontSize:11,marginTop:8,lineHeight:1.4}}>
+                              Songs you&apos;ve already played this game can&apos;t be picked again.
+                            </div>
+                          )}
                           <button className="btn" disabled={!mySong.trim()} onClick={submitSong}
                             style={{background:mySong.trim()?COLORS[isPlayer1?0:1]:SURFACE,color:mySong.trim()?"#0D0A14":MUTED2,marginTop:8,fontSize:16}}>
                             LOCK IT IN ✓
@@ -1624,7 +1692,9 @@ export default function HitForHit() {
                         <span className="bf" style={{color:MUTED2,fontSize:11}}>({isPlayer1?gs.artist2:gs.artist1})</span>
                       </div>
                       <div className="bf" style={{color: (isPlayer1?gs.p2Ready:gs.p1Ready)?"#4ade80":MUTED3, fontSize:13,marginTop:6}}>
-                        {(isPlayer1?gs.p2Ready:gs.p1Ready) ? "✓ Song locked in" : "Choosing their song…"}
+                        {(isPlayer1?gs.p2Ready:gs.p1Ready)
+                          ? hiddenSongLabel(isPlayer1 ? gs.player2 : gs.player1)
+                          : "Choosing their song…"}
                       </div>
                     </div>
                   </div>
@@ -1639,7 +1709,7 @@ export default function HitForHit() {
                     <div style={{display:"flex",gap:12,justifyContent:"center",marginTop:14}}>
                       {[0,1].map(i=>(
                         <div key={i} className="bf" style={{fontSize:11,color: (i===0?gs.p1Ready:gs.p2Ready)?"#4ade80":MUTED3}}>
-                          {(i===0?gs.player1:gs.player2)}: {(i===0?gs.p1Ready:gs.p2Ready)?"ready ✓":"picking…"}
+                          {(i===0?gs.p1Ready:gs.p2Ready) ? hiddenSongLabel(players[i]) : `${players[i]}: picking…`}
                         </div>
                       ))}
                     </div>
@@ -1655,7 +1725,7 @@ export default function HitForHit() {
                     <div style={{display:"flex",gap:12,justifyContent:"center",marginTop:8}}>
                       {[0,1].map(i=>(
                         <div key={i} className="bf" style={{fontSize:11,color: (i===0?gs.p1Ready:gs.p2Ready)?"#4ade80":MUTED3}}>
-                          {players[i]}: {(i===0?gs.p1Ready:gs.p2Ready)?"ready ✓":"picking…"}
+                          {(i===0?gs.p1Ready:gs.p2Ready) ? hiddenSongLabel(players[i]) : `${players[i]}: picking…`}
                         </div>
                       ))}
                     </div>
@@ -1686,6 +1756,7 @@ export default function HitForHit() {
                   {[0,1].map(i=>{
                     const playing = (gs.playbackIndex ?? 0) === i;
                     const done = (gs.playbackIndex ?? 0) > i;
+                    const revealed = isSongRevealed(gs, i);
                     return (
                       <div key={i} style={{
                         background: playing ? COLORS_DIM[i] : SURFACE2,
@@ -1696,8 +1767,14 @@ export default function HitForHit() {
                         <div className="bf" style={{color:MUTED2,fontSize:10,letterSpacing:".06em",marginBottom:4,textTransform:"uppercase"}}>
                           {i===0?gs.artist1:gs.artist2}
                         </div>
-                        <div className="hd" style={{color:COLORS[i],fontSize:16,letterSpacing:".04em",lineHeight:1.25}}>
-                          {i===0?gs.song1:gs.song2}
+                        <div className="hd" style={{
+                          color: revealed ? COLORS[i] : MUTED2,
+                          fontSize: revealed ? 16 : 14,
+                          letterSpacing:".04em",
+                          lineHeight:1.25,
+                          fontStyle: revealed ? "normal" : "italic",
+                        }}>
+                          {songDisplayTitle(gs, i, players)}
                         </div>
                         <div className="bf" style={{color:MUTED2,fontSize:11,marginTop:4}}>{players[i]}</div>
                         {playing && (
@@ -1770,24 +1847,37 @@ export default function HitForHit() {
                 <div style={{textAlign:"center",marginBottom:"1.25rem"}}>
                   <div className="hd" style={{fontSize:28,letterSpacing:".06em",marginBottom:4}}>JUDGES VOTE</div>
                   <div className="bf" style={{color:MUTED1,fontSize:13}}>
-                    {allVotesIn ? "All votes in — tally below" : `${votesCast} / ${votesTotal} votes received`}
+                    {allVotesIn
+                      ? "All votes in — tally below"
+                      : votesTotal > 0
+                        ? `${votesCast} / ${votesTotal} votes received`
+                        : "No judges in this room"}
                   </div>
-                  {!allVotesIn && (
+                  {!allVotesIn && votesTotal > 0 && (
                     <div className="bf" style={{color:MUTED3,fontSize:12,marginTop:8,lineHeight:1.45,maxWidth:320,marginLeft:"auto",marginRight:"auto"}}>
-                      Votes are anonymous until everyone has voted (Kahoot-style). You will not see who picked which side until all ballots are in.
+                      Who voted for whom stays hidden until all ballots are in.
                     </div>
                   )}
                 </div>
 
-                {/* Songs on display */}
+                {/* Songs on display — titles reveal as each plays */}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:"1.25rem"}}>
-                  {[0,1].map(i=>(
+                  {[0,1].map(i=>{
+                    const revealed = isSongRevealed(gs, i);
+                    return (
                     <div key={i} style={{background:COLORS_DIM[i],border:`1px solid ${COLORS[i]}44`,borderRadius:12,padding:"1rem",textAlign:"center"}}>
                       <div className="bf" style={{color:MUTED2,fontSize:10,letterSpacing:".06em",marginBottom:4,textTransform:"uppercase"}}>{i===0?gs.artist1:gs.artist2}</div>
-                      <div className="hd" style={{color:COLORS[i],fontSize:17,letterSpacing:".04em",lineHeight:1.25}}>{i===0?gs.song1:gs.song2}</div>
+                      <div className="hd" style={{
+                        color: revealed ? COLORS[i] : MUTED2,
+                        fontSize: revealed ? 17 : 14,
+                        letterSpacing:".04em",
+                        lineHeight:1.25,
+                        fontStyle: revealed ? "normal" : "italic",
+                      }}>{songDisplayTitle(gs, i, players)}</div>
                       <div className="bf" style={{color:MUTED2,fontSize:11,marginTop:4}}>{players[i]}</div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Vote buttons — judges only */}
