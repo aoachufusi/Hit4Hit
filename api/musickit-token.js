@@ -29,7 +29,7 @@ export default function handler(req, res) {
   }
 
   if (!getMusicKitCredentials()) {
-    return res.status(500).json({ error: "Missing credentials" });
+    return res.status(503).json({ error: "Service unavailable" });
   }
 
   try {

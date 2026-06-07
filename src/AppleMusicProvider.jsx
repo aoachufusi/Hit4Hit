@@ -9,6 +9,7 @@ import {
   normalizeAppleArtists,
   normalizeAppleTracks,
 } from "./musicConstants.js";
+import { logClientError } from "./utils/userError.js";
 
 function clampSearchLimit(limit, fallback = 10) {
   const x = Math.floor(Number(limit));
@@ -52,7 +53,8 @@ export function AppleMusicProvider({ children }) {
       } catch (e) {
         if (!cancelled) {
           setSearchReady(false);
-          setStatus(String(e?.message || e));
+          logClientError("Apple Music provider init failed:", e);
+          setStatus("unavailable");
         }
       }
     })();

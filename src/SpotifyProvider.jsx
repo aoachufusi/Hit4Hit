@@ -23,6 +23,7 @@ import {
   searchArtistsWithToken,
   searchTracksWithToken,
 } from "./spotifyApi.js";
+import { logClientError } from "./utils/userError.js";
 
 function parseCallbackUrl() {
   const url = new URL(window.location.href);
@@ -65,9 +66,8 @@ export function SpotifyProvider({ children }) {
   useEffect(() => {
     const { pathname, code, error } = parseCallbackUrl();
     if (error) {
-      queueMicrotask(() =>
-        setPlayerStatus(`Spotify auth error: ${error}`)
-      );
+      logClientError("Spotify OAuth callback error:", error);
+      queueMicrotask(() => setPlayerStatus("Spotify login failed — please try again"));
       return;
     }
     if (pathname !== "/callback" || !code) return;
@@ -89,7 +89,10 @@ export function SpotifyProvider({ children }) {
         window.history.replaceState({}, "", "/");
         setPlayerStatus("");
       } catch (e) {
-        if (!cancelled) setPlayerStatus(String(e?.message || e));
+        if (!cancelled) {
+          logClientError("Spotify token exchange failed:", e);
+          setPlayerStatus("Spotify login failed — please try again");
+        }
       }
     })();
 
@@ -126,7 +129,10 @@ export function SpotifyProvider({ children }) {
         setDeviceId(device_id);
         setPlayerStatus("");
       } catch (e) {
-        if (!cancelled) setPlayerStatus(String(e?.message || e));
+        if (!cancelled) {
+          logClientError("Spotify player init failed:", e);
+          setPlayerStatus("Spotify playback unavailable — try logging in again");
+        }
       }
     })();
 

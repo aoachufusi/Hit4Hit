@@ -115,9 +115,7 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/apple-music/developer-token" && req.method === "GET") {
       if (!getAppleMusicConfig()) {
-        sendJson(res, 503, {
-          error: "Apple Music not configured. Set APPLE_MUSIC_* env vars.",
-        });
+        sendJson(res, 503, { error: "Service unavailable" });
         return;
       }
       try {
@@ -125,16 +123,15 @@ const server = http.createServer(async (req, res) => {
         res.setHeader("Cache-Control", "private, max-age=1800");
         sendJson(res, 200, { developerToken, expiresAt });
       } catch (e) {
-        sendJson(res, 500, { error: String(e?.message || e) });
+        console.error("Apple Music developer token failed:", e);
+        sendJson(res, 500, { error: "Something went wrong — please try again" });
       }
       return;
     }
 
     if (url.pathname === "/api/apple-music/search" && req.method === "GET") {
       if (!getAppleMusicConfig()) {
-        sendJson(res, 503, {
-          error: "Apple Music not configured. Set APPLE_MUSIC_* env vars.",
-        });
+        sendJson(res, 503, { error: "Service unavailable" });
         return;
       }
       const term = String(url.searchParams.get("term") || "").trim();
@@ -156,23 +153,23 @@ const server = http.createServer(async (req, res) => {
         );
         const body = await apiRes.json().catch(() => ({}));
         if (!apiRes.ok) {
-          sendJson(res, apiRes.status, {
-            error: body?.errors?.[0]?.title || "Apple Music search failed",
-          });
+          console.error("Apple Music search failed:", body);
+          sendJson(res, apiRes.status, { error: "Something went wrong — please try again" });
           return;
         }
         res.setHeader("Cache-Control", "private, max-age=60");
         sendJson(res, 200, body);
       } catch (e) {
-        sendJson(res, 500, { error: String(e?.message || e) });
+        console.error("Apple Music search failed:", e);
+        sendJson(res, 500, { error: "Something went wrong — please try again" });
       }
       return;
     }
 
     sendJson(res, 404, { error: "Not found" });
   } catch (e) {
-    console.error(e);
-    sendJson(res, 500, { error: String(e?.message || e) });
+    console.error("API request failed:", e);
+    sendJson(res, 500, { error: "Something went wrong — please try again" });
   }
 });
 

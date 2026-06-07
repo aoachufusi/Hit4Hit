@@ -20,6 +20,7 @@ import {
   artistsMatch,
   isArtistBlocked,
 } from "./gameStateUtils.js";
+import { logClientError, GENERIC_USER_ERROR } from "./utils/userError.js";
 import {
   createGame as firebaseCreateGame,
   getGame,
@@ -372,7 +373,31 @@ export default function HitForHit() {
     const hn = sanitizeName(player1Name);
     if (!isValidName(hn)) return;
     setConnStatus("syncing");
-    const code = generateCode();
+
+    const generateUniqueCode = async () => {
+      let code;
+      let attempts = 0;
+
+      do {
+        code = generateCode();
+        const existing = await getGame(code);
+        attempts++;
+
+        if (attempts > 10) throw new Error("Could not generate unique code");
+      } while (existing !== null);
+
+      return code;
+    };
+
+    let code;
+    try {
+      code = await generateUniqueCode();
+    } catch {
+      setConnStatus("error");
+      showToast("Could not generate a room code — try again.");
+      return;
+    }
+
     const r = Math.min(12, Math.max(1, Number(rounds) || 5));
     const newGame = {
       code,
@@ -403,12 +428,13 @@ export default function HitForHit() {
     try {
       await firebaseCreateGame(newGame);
     } catch (e) {
+      logClientError("Game creation failed:", e);
       setConnStatus("error");
       const msg = String(e?.message || e);
       if (/permission_denied|Permission denied/i.test(msg)) {
-        showToast("Firebase denied write access — enable Anonymous Auth and deploy database rules for /games.");
+        showToast("Could not create game — please try again.");
       } else {
-        showToast(msg.includes("Firebase") ? msg : "Failed to create game. Try again.");
+        showToast(GENERIC_USER_ERROR);
       }
       return;
     }
@@ -448,6 +474,26 @@ export default function HitForHit() {
     const found = normalizeGameState(raw);
     if (!found) { setJoinError("Game not found — check the code"); setConnStatus("ok"); return; }
     if (found.phase !== PHASES.LOBBY) { setJoinError("This game already started"); setConnStatus("ok"); return; }
+
+    const gameAge = Date.now() - (found.createdAt ?? 0);
+    if (found.createdAt && gameAge > 4 * 60 * 60 * 1000) {
+      setJoinError("This game has expired");
+      setConnStatus("ok");
+      return;
+    }
+
+    if (namesMatch(name, found.player1) || namesMatch(name, found.player2)) {
+      setJoinError("That name is already taken");
+      setConnStatus("ok");
+      return;
+    }
+
+    const judgeCount = toArray(found.judges).length;
+    if (judgeCount >= found.maxJudges) {
+      setJoinError("Game is full");
+      setConnStatus("ok");
+      return;
+    }
 
     const maxPeople = 2 + found.maxJudges;
     const members = [...(found.members || [])];
@@ -878,7 +924,8 @@ export default function HitForHit() {
           setMusicKitReady(false);
           setAppleSearchReady(false);
           setAppleMusicConnected(false);
-          setMusicKitStatus(String(e?.message || e));
+          logClientError("Apple Music setup failed:", e);
+          setMusicKitStatus("unavailable");
         }
       }
     })();
@@ -903,7 +950,8 @@ export default function HitForHit() {
       setMusicKitReady(true);
       showToast("Apple Music connected");
     } catch (e) {
-      showToast(String(e?.message || e));
+      logClientError("Apple Music connect failed:", e);
+      showToast(GENERIC_USER_ERROR);
     }
   }, [screen, myName, myRole, joinCode, player1Name, gs?.code, showToast]);
 
@@ -913,7 +961,8 @@ export default function HitForHit() {
       setAppleMusicConnected(false);
       showToast("Apple Music disconnected");
     } catch (e) {
-      showToast(String(e?.message || e));
+      logClientError("Apple Music disconnect failed:", e);
+      showToast(GENERIC_USER_ERROR);
     }
   }, [showToast]);
 
@@ -1202,7 +1251,7 @@ export default function HitForHit() {
                 <span
                   className="bf"
                   style={{ fontSize: 10, color: MUTED3 }}
-                  title={musicKitStatus || "Apple Music loading…"}
+                  title={musicKitStatus === "unavailable" ? "Apple Music unavailable" : "Apple Music loading…"}
                 >
                   {musicLabel}
                 </span>
@@ -1260,7 +1309,8 @@ export default function HitForHit() {
                       });
                       await spotify.login();
                     } catch (e) {
-                      showToast(String(e?.message || e));
+                      logClientError("Spotify login failed:", e);
+                      showToast(GENERIC_USER_ERROR);
                     }
                   }}
                 >
@@ -1471,10 +1521,10 @@ export default function HitForHit() {
               </div>
             )}
 
-            {usesAppleMusic && !appleSearchReady && musicKitStatus && (
+            {usesAppleMusic && !appleSearchReady && musicKitStatus === "unavailable" && (
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#f8717144"}}>
                 <div className="bf" style={{color:"#f87171",fontSize:12,lineHeight:1.5}}>
-                  Apple Music unavailable: {musicKitStatus}
+                  Apple Music is unavailable right now. Please try again later.
                 </div>
               </div>
             )}

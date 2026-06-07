@@ -10,9 +10,7 @@ export default function handler(req, res) {
   }
 
   if (!getAppleMusicConfig()) {
-    res.status(503).json({
-      error: "Apple Music not configured. Set APPLE_MUSIC_* env vars on the server.",
-    });
+    res.status(503).json({ error: "Service unavailable" });
     return;
   }
 
@@ -21,6 +19,7 @@ export default function handler(req, res) {
     res.setHeader("Cache-Control", "private, max-age=1800");
     res.status(200).json({ developerToken, expiresAt });
   } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
+    console.error("Apple Music developer token failed:", e);
+    res.status(500).json({ error: "Something went wrong — please try again" });
   }
 }

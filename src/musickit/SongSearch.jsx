@@ -5,6 +5,7 @@ import {
   SEARCH_RESULT_BUTTON_STYLE,
   useSearchDropdown,
 } from "./searchDropdownUtils.js";
+import { logClientError, GENERIC_USER_ERROR } from "../utils/userError.js";
 
 const BORDER = "#2e1f4a";
 const SURFACE2 = "#160f25";
@@ -64,7 +65,8 @@ export default function SongSearch({
       } catch (e) {
         if (searchEpochRef.current === epoch) {
           setResults([]);
-          onToast?.(String(e?.message || e));
+          logClientError("Song search failed:", e);
+          onToast?.(GENERIC_USER_ERROR);
         }
       } finally {
         if (searchEpochRef.current === epoch) setLoading(false);

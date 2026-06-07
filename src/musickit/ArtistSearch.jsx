@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { isArtistBlocked } from "../gameStateUtils.js";
+import { logClientError, GENERIC_USER_ERROR } from "../utils/userError.js";
 import { searchArtists as searchAppleArtists } from "./musickitService.js";
 import {
   SEARCH_INPUT_IOS_STYLE,
@@ -61,7 +62,8 @@ export default function ArtistSearch({
       } catch (e) {
         if (searchEpochRef.current === epoch) {
           setResults([]);
-          onToast?.(String(e?.message || e));
+          logClientError("Artist search failed:", e);
+          onToast?.(GENERIC_USER_ERROR);
         }
       } finally {
         if (searchEpochRef.current === epoch) setLoading(false);

@@ -30,7 +30,7 @@ export class ErrorBoundary extends Component {
             Something went wrong
           </h1>
           <p style={{ color: "#aa88d0", marginBottom: "1rem", lineHeight: 1.5 }}>
-            {String(this.state.error?.message || this.state.error)}
+            Please reload the page and try again.
           </p>
           <button
             type="button"
