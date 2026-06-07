@@ -1033,6 +1033,18 @@ export default function HitForHit() {
         });
         if (cancelled || playbackEpochRef.current !== epoch) return;
 
+        if (result?.type === "none" && isHost) {
+          if (usesAppleMusic) {
+            showToast("Couldn't play — host: connect Apple Music or pick from search");
+          } else if (!spotify.loggedIn) {
+            showToast("Couldn't play — host must log in to Spotify");
+          } else if (!spotify.deviceId) {
+            showToast("Couldn't play — wait for Spotify player to connect");
+          } else {
+            showToast("Couldn't play this song — pick a track from search results");
+          }
+        }
+
         if (isHost) {
           cleanupWait = waitForPlaybackEnd(result, () => {
             if (!cancelled && playbackEpochRef.current === epoch) {
@@ -1071,6 +1083,7 @@ export default function HitForHit() {
     spotify.playUri,
     advancePlayback,
     openVoting,
+    showToast,
   ]);
 
   // Safety net: host auto-advances if playback stalls
@@ -1860,6 +1873,11 @@ export default function HitForHit() {
                       : (gs.playbackIndex ?? 0) === 1
                         ? `Now playing: ${players[1]}'s pick`
                         : "Get ready to vote…"}
+                  </div>
+                  <div className="bf" style={{color:MUTED3,fontSize:11,marginTop:6,lineHeight:1.45}}>
+                    {isHost
+                      ? "You control playback — keep this tab open with volume up."
+                      : "Audio plays on the host's device only."}
                   </div>
                 </div>
 

@@ -241,11 +241,41 @@ export async function getArtistTopSongs(artistId) {
 }
 
 // ── Play a 30-second preview using a plain Audio element
-// Returns the Audio object so you can pause/stop it later
 export async function playPreview(previewUrl) {
   const audio = new Audio(previewUrl);
-  await audio.play();
+  try {
+    await audio.play();
+  } catch (e) {
+    audio.pause();
+    throw e;
+  }
   return audio;
+}
+
+function musicKitInstance() {
+  try {
+    return typeof window !== "undefined" && window.MusicKit?.getInstance?.();
+  } catch {
+    return null;
+  }
+}
+
+/** Full Apple Music playback (host must be authorized). */
+export async function playAppleMusicTrack(catalogSongId) {
+  const music = musicKitInstance();
+  if (!music?.isAuthorized) {
+    throw new Error("Apple Music not authorized");
+  }
+  await music.setQueue({ song: catalogSongId });
+  await music.play();
+  return music;
+}
+
+export function stopAppleMusicPlayback() {
+  const music = musicKitInstance();
+  if (music?.isPlaying) {
+    music.stop();
+  }
 }
 
 // ── Stop a playing preview

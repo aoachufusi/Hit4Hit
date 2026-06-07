@@ -1,5 +1,11 @@
 import { MUSIC_PROVIDERS, normalizeMusicProvider } from "./musicConstants.js";
-import { searchTracks as searchAppleTracks, playPreview, stopPreview } from "./musickit/musickitService.js";
+import {
+  searchTracks as searchAppleTracks,
+  playPreview,
+  stopPreview,
+  playAppleMusicTrack,
+  stopAppleMusicPlayback,
+} from "./musickit/musickitService.js";
 
 export function extractSongTitle(label) {
   const s = String(label || "").trim();
@@ -41,13 +47,29 @@ export async function resolveTrackForPlayback(meta, label, artist, deps) {
 }
 
 export async function playRoundTrack(trackMeta, { playSpotifyUri } = {}) {
-  stopPreview(playRoundTrack.activeAudio);
-  playRoundTrack.activeAudio = null;
+  stopRoundPlayback();
 
   if (trackMeta?.preview) {
-    const audio = await playPreview(trackMeta.preview);
-    playRoundTrack.activeAudio = audio;
-    return { type: "preview", audio };
+    try {
+      const audio = await playPreview(trackMeta.preview);
+      playRoundTrack.activeAudio = audio;
+      return { type: "preview", audio };
+    } catch (e) {
+      console.warn("Preview playback failed, trying full track", e);
+    }
+  }
+
+  if (
+    trackMeta?.uri &&
+    trackMeta.provider === MUSIC_PROVIDERS.APPLE
+  ) {
+    try {
+      const music = await playAppleMusicTrack(trackMeta.uri);
+      playRoundTrack.activeMusic = music;
+      return { type: "apple-music", music };
+    } catch (e) {
+      console.warn("Apple Music full playback failed", e);
+    }
   }
 
   if (
@@ -63,10 +85,13 @@ export async function playRoundTrack(trackMeta, { playSpotifyUri } = {}) {
 }
 
 playRoundTrack.activeAudio = null;
+playRoundTrack.activeMusic = null;
 
 export function stopRoundPlayback() {
   stopPreview(playRoundTrack.activeAudio);
   playRoundTrack.activeAudio = null;
+  stopAppleMusicPlayback();
+  playRoundTrack.activeMusic = null;
 }
 
 export function waitForPlaybackEnd(result, onDone) {
@@ -93,6 +118,34 @@ export function waitForPlaybackEnd(result, onDone) {
   if (result?.type === "spotify") {
     const timer = setTimeout(onDone, 3 * 60 * 1000);
     return () => clearTimeout(timer);
+  }
+
+  if (result?.type === "apple-music" && result.music) {
+    const music = result.music;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      music.removeEventListener("playbackStateDidChange", onStateChange);
+      clearTimeout(fallback);
+      onDone();
+    };
+    const onStateChange = () => {
+      const PS = window.MusicKit?.PlaybackStates;
+      if (
+        music.playbackState === PS?.ended ||
+        music.playbackState === PS?.stopped
+      ) {
+        finish();
+      }
+    };
+    music.addEventListener("playbackStateDidChange", onStateChange);
+    const fallback = setTimeout(finish, 3 * 60 * 1000);
+    return () => {
+      done = true;
+      clearTimeout(fallback);
+      music.removeEventListener("playbackStateDidChange", onStateChange);
+    };
   }
 
   const timer = setTimeout(onDone, 4_000);
