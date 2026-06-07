@@ -1684,11 +1684,8 @@ export default function HitForHit() {
             {/* Scoreboard — visible throughout the game until final */}
             {gs.phase!==PHASES.FINAL && (
               <div className="card" style={{padding:"1rem 1.25rem",marginBottom:"1.25rem"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                  <div className="hd" style={{fontSize:13,letterSpacing:".08em",color:MUTED2}}>SCOREBOARD</div>
-                  <span className="bf" style={{fontSize:10,color:MUTED3}}>
-                    Split +1 each · Majority +2 / +0
-                  </span>
+                <div className="hd" style={{fontSize:13,letterSpacing:".08em",color:MUTED2,marginBottom:10}}>
+                  SCOREBOARD
                 </div>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",marginBottom:10,gap:8}}>
                   <div style={{flex:"1 1 0",minWidth:0,textAlign:"left"}}>
@@ -1708,12 +1705,35 @@ export default function HitForHit() {
                   const total = s0 + (scores[1] ?? 0);
                   const p0 = total > 0 ? (s0 / total) * 100 : 50;
                   return (
-                    <div style={{display:"flex",gap:3,height:6,borderRadius:3,overflow:"hidden",marginBottom:roundHistory.length > 0 ? 12 : 0}}>
+                    <div style={{display:"flex",gap:3,height:6,borderRadius:3,overflow:"hidden",marginBottom:12}}>
                       <div style={{background:C,width:`${p0}%`,transition:"width .5s"}}/>
                       <div style={{background:C2,width:`${100 - p0}%`,transition:"width .5s"}}/>
                     </div>
                   );
                 })()}
+                <details style={{marginBottom:roundHistory.length > 0 ? 12 : 0}}>
+                  <summary
+                    className="bf"
+                    style={{
+                      cursor:"pointer",
+                      fontSize:11,
+                      color:MUTED2,
+                      letterSpacing:".04em",
+                      listStyle:"none",
+                      userSelect:"none",
+                    }}
+                  >
+                    Scoring System
+                  </summary>
+                  <div className="bf" style={{fontSize:11,color:MUTED1,lineHeight:1.55,marginTop:8,paddingTop:8,borderTop:`1px solid ${BORDER}`}}>
+                    <p style={{marginBottom:6}}>
+                      <strong style={{color:TEXT}}>Split vote:</strong> Judges tie → both players get +1.
+                    </p>
+                    <p style={{marginBottom:0}}>
+                      <strong style={{color:TEXT}}>Majority wins:</strong> Most judges pick one player → winner +2, loser +0.
+                    </p>
+                  </div>
+                </details>
                 {roundHistory.length > 0 && (
                   <div>
                     <div className="bf" style={{fontSize:10,color:MUTED3,letterSpacing:".06em",textTransform:"uppercase",marginBottom:6}}>
