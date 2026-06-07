@@ -1227,6 +1227,12 @@ export default function HitForHit() {
     .pill{border-radius:20px;display:inline-flex;align-items:center;gap:5px;font-family:'Manrope',sans-serif;font-size:11px;padding:3px 9px;}
     .tag{border-radius:4px;display:inline-block;font-family:'Manrope',sans-serif;font-size:11px;font-weight:600;letter-spacing:.05em;padding:2px 7px;text-transform:uppercase;}
     .hrow{border-bottom:1px solid #1e1435;display:flex;justify-content:space-between;align-items:center;padding:6px 0;}
+    .scoreboard-matchup{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:8px;width:100%;margin-bottom:10px;}
+    .scoreboard-side{min-width:0;}
+    .scoreboard-side--left{text-align:left;}
+    .scoreboard-side--right{text-align:right;}
+    .scoreboard-vs{color:${MUTED3};font-size:16px;text-align:center;padding:0 4px;white-space:nowrap;}
+    .scoreboard-clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .conn-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
     .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#2a1750;border:1px solid #5b21b6;border-radius:8px;color:#e9d5ff;font-family:'Manrope',sans-serif;font-size:13px;padding:10px 20px;z-index:1000;white-space:nowrap;box-shadow:0 4px 24px #0007;}
   `;
@@ -1705,16 +1711,16 @@ export default function HitForHit() {
                 <div className="hd" style={{fontSize:13,letterSpacing:".08em",color:MUTED2,marginBottom:10}}>
                   SCOREBOARD
                 </div>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",marginBottom:10,gap:8}}>
-                  <div style={{flex:"1 1 0",minWidth:0,textAlign:"left"}}>
-                    <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[0]}}>{players[0].toUpperCase()}</div>
-                    <div className="bf" style={{color:MUTED3,fontSize:10}}>{gs.artist1}</div>
+                <div className="scoreboard-matchup">
+                  <div className="scoreboard-side scoreboard-side--left">
+                    <div className="hd scoreboard-clip" style={{fontSize:11,letterSpacing:".06em",color:COLORS[0]}}>{players[0].toUpperCase()}</div>
+                    <div className="bf scoreboard-clip" style={{color:MUTED3,fontSize:10}}>{gs.artist1}</div>
                     <div className="hd" style={{fontSize:40,color:COLORS[0],lineHeight:1}}>{scores[0] ?? 0}</div>
                   </div>
-                  <div className="hd" style={{color:MUTED3,fontSize:16,flexShrink:0,textAlign:"center",padding:"0 4px"}}>VS</div>
-                  <div style={{flex:"1 1 0",minWidth:0,textAlign:"right"}}>
-                    <div className="hd" style={{fontSize:11,letterSpacing:".06em",color:COLORS[1]}}>{players[1].toUpperCase()}</div>
-                    <div className="bf" style={{color:MUTED3,fontSize:10}}>{gs.artist2}</div>
+                  <div className="hd scoreboard-vs">VS</div>
+                  <div className="scoreboard-side scoreboard-side--right">
+                    <div className="hd scoreboard-clip" style={{fontSize:11,letterSpacing:".06em",color:COLORS[1]}}>{players[1].toUpperCase()}</div>
+                    <div className="bf scoreboard-clip" style={{color:MUTED3,fontSize:10}}>{gs.artist2}</div>
                     <div className="hd" style={{fontSize:40,color:COLORS[1],lineHeight:1}}>{scores[1] ?? 0}</div>
                   </div>
                 </div>
