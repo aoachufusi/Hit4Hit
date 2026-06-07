@@ -2,8 +2,8 @@
   "rules": {
     "games": {
       "$code": {
-        ".read": true,
-        ".write": true
+        ".read": "auth != null",
+        ".write": "auth != null"
       }
     }
   }

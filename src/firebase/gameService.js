@@ -2,19 +2,21 @@ import {
   ref, set, get, update, onValue,
 } from "firebase/database";
 import { db, isFirebaseConfigured } from "./config.js";
+import { ensureAuth } from "./auth.js";
 
-function requireDb() {
+async function requireDb() {
   if (!isFirebaseConfigured || !db) {
     throw new Error(
       "Firebase is not configured. Check VITE_FIREBASE_* in .env and restart the dev server."
     );
   }
+  await ensureAuth();
   return db;
 }
 
 // ── Create a new game
 export async function createGame(gameState) {
-  const gameRef = ref(requireDb(), `games/${gameState.code}`);
+  const gameRef = ref(await requireDb(), `games/${gameState.code}`);
   await set(gameRef, {
     ...gameState,
     createdAt: Date.now(),
@@ -25,13 +27,13 @@ export async function createGame(gameState) {
 
 // ── Read a game once (for joining)
 export async function getGame(code) {
-  const snap = await get(ref(requireDb(), `games/${code}`));
+  const snap = await get(ref(await requireDb(), `games/${code}`));
   return snap.exists() ? snap.val() : null;
 }
 
 // ── Full state overwrite
 export async function setGame(state) {
-  await set(ref(requireDb(), `games/${state.code}`), {
+  await set(ref(await requireDb(), `games/${state.code}`), {
     ...state,
     updatedAt: Date.now(),
   });
@@ -40,7 +42,7 @@ export async function setGame(state) {
 
 // ── Partial update — for single-field changes
 export async function updateGame(code, patch) {
-  await update(ref(requireDb(), `games/${code}`), {
+  await update(ref(await requireDb(), `games/${code}`), {
     ...patch,
     updatedAt: Date.now(),
   });
@@ -48,13 +50,13 @@ export async function updateGame(code, patch) {
 
 // ── Single judge vote — avoids overwriting concurrent votes on judgeVotes
 export async function castVote(code, judgeName, vote) {
-  await set(ref(requireDb(), `games/${code}/judgeVotes/${judgeName}`), vote);
+  await set(ref(await requireDb(), `games/${code}/judgeVotes/${judgeName}`), vote);
 }
 
 // ── Real-time listener — call this when joining a game
 // Returns an unsubscribe function — call it on component unmount
-export function subscribeToGame(code, onChange, onError) {
-  const gameRef = ref(requireDb(), `games/${code}`);
+export async function subscribeToGame(code, onChange, onError) {
+  const gameRef = ref(await requireDb(), `games/${code}`);
   return onValue(
     gameRef,
     (snap) => {
@@ -69,5 +71,5 @@ export function subscribeToGame(code, onChange, onError) {
 
 // ── Delete game when finished (keep DB clean)
 export async function deleteGame(code) {
-  await set(ref(requireDb(), `games/${code}`), null);
+  await set(ref(await requireDb(), `games/${code}`), null);
 }

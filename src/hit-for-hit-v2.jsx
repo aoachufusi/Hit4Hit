@@ -1,5 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
+  sanitizeName,
+  sanitizeSong,
+  isValidCode,
+  isValidName,
+} from "./utils/sanitize.js";
+import {
   normalizeGameState,
   toArray,
   playerLabel,
@@ -23,6 +29,7 @@ import {
   deleteGame,
 } from "./firebase/gameService.js";
 import { isFirebaseConfigured } from "./firebase/config.js";
+import { ensureAuth } from "./firebase/auth.js";
 import { useSpotify } from "./useSpotify.js";
 import SongSearch from "./musickit/SongSearch.jsx";
 import { getInviteUrl } from "./appUrl.js";
@@ -216,6 +223,7 @@ export default function HitForHit() {
   const [screen, setScreen]     = useState("home");
   const [myName, setMyName]     = useState("");
   const [myRole, setMyRole]     = useState(null); // "host"|"player2"|"judge"
+  const [userId, setUserId]     = useState(null);
 
   // ── Remote game state (polled)
   const [gs, setGs]             = useState(null);
@@ -254,7 +262,9 @@ export default function HitForHit() {
 
   const startListening = useCallback((code) => {
     if (unsubRef.current) unsubRef.current();
-    unsubRef.current = subscribeToGame(
+    unsubRef.current = null;
+
+    subscribeToGame(
       code,
       (fresh) => {
         try {
@@ -266,13 +276,28 @@ export default function HitForHit() {
         }
       },
       () => setConnStatus("error")
-    );
+    )
+      .then((unsub) => {
+        unsubRef.current = unsub;
+      })
+      .catch((err) => {
+        console.error("subscribeToGame failed", err);
+        setConnStatus("error");
+      });
   }, []);
 
   useEffect(() => {
     return () => {
       if (unsubRef.current) unsubRef.current();
     };
+  }, []);
+
+  useEffect(() => {
+    ensureAuth().then((user) => {
+      setUserId(user.uid);
+    }).catch((err) => {
+      console.error("Firebase anonymous auth failed", err);
+    });
   }, []);
 
   useEffect(() => {
@@ -344,10 +369,10 @@ export default function HitForHit() {
 
   // ── CREATE GAME ──────────────────────────────────────────────────────────
   const createGame = async () => {
-    if (!player1Name.trim()) return;
+    const hn = sanitizeName(player1Name);
+    if (!isValidName(hn)) return;
     setConnStatus("syncing");
     const code = generateCode();
-    const hn = player1Name.trim();
     const r = Math.min(12, Math.max(1, Number(rounds) || 5));
     const newGame = {
       code,
@@ -381,13 +406,14 @@ export default function HitForHit() {
       setConnStatus("error");
       const msg = String(e?.message || e);
       if (/permission_denied|Permission denied/i.test(msg)) {
-        showToast("Firebase denied write access — update Realtime Database rules for /games.");
+        showToast("Firebase denied write access — enable Anonymous Auth and deploy database rules for /games.");
       } else {
         showToast(msg.includes("Firebase") ? msg : "Failed to create game. Try again.");
       }
       return;
     }
     setMyName(hn);
+    setPlayer1Name(hn);
     setMyRole("host");
     setHostPickP1("");
     setHostPickP2("");
@@ -400,9 +426,15 @@ export default function HitForHit() {
   const joinGame = async () => {
     setJoinError("");
     const code = joinCode.trim().toUpperCase();
-    if (code.length !== 6) { setJoinError("Enter the 6-character code"); return; }
-    const name = myName.trim();
-    if (!name) { setJoinError("Enter your name first"); return; }
+    if (!isValidCode(code)) {
+      setJoinError("Enter a valid 6-character code");
+      return;
+    }
+    const name = sanitizeName(myName);
+    if (!isValidName(name)) {
+      setJoinError("Enter your name first");
+      return;
+    }
 
     setConnStatus("syncing");
     let raw;
@@ -463,6 +495,7 @@ export default function HitForHit() {
     }
 
     setMyRole(role);
+    setMyName(name);
     setScreen("lobby");
     startListening(code);
     setConnStatus("ok");
@@ -488,10 +521,20 @@ export default function HitForHit() {
   };
 
   // ── HOST: pick two music players from everyone in the lobby ─────────────
+  const updatePlayer2 = (rawName) => {
+    const p2 = sanitizeName(rawName);
+    if (!isValidName(p2)) {
+      showToast("Pick a valid Player 2 from the lobby.");
+      return null;
+    }
+    return p2;
+  };
+
   const assignPlayersFromLobby = async () => {
     if (!gs || myName !== gs.hostName) return;
     const p1 = hostPickP1.trim();
-    const p2 = hostPickP2.trim();
+    const p2 = updatePlayer2(hostPickP2);
+    if (!p2) return;
     if (!p1 || !p2 || p1 === p2) {
       showToast("Pick two different people for Player 1 and Player 2.");
       return;
@@ -547,18 +590,21 @@ export default function HitForHit() {
 
   // ── SUBMIT MY SONG ───────────────────────────────────────────────────────
   const submitSong = async () => {
-    if (!mySong.trim() || !gs) return;
+    if (!gs) return;
+    const song = sanitizeSong(mySong);
+    if (!song) return;
     const isP1 = myName === gs.player1;
     const playerIdx = isP1 ? 0 : 1;
-    if (isSongAlreadyUsed(mySong.trim(), myTrackMeta, gs.roundHistory, playerIdx)) {
+    if (isSongAlreadyUsed(song, myTrackMeta, gs.roundHistory, playerIdx)) {
       showToast("You already played that song in an earlier round — pick something else");
       return;
     }
     const patch = isP1
-      ? { song1: mySong.trim(), p1Ready: true, song1Meta: myTrackMeta || null }
-      : { song2: mySong.trim(), p2Ready: true, song2Meta: myTrackMeta || null };
+      ? { song1: song, p1Ready: true, song1Meta: myTrackMeta || null }
+      : { song2: song, p2Ready: true, song2Meta: myTrackMeta || null };
 
     setSongSubmitted(true);
+    setMySong(song);
     const merged = { ...gs, ...patch };
     try {
       await updateGame(gs.code, patch);
