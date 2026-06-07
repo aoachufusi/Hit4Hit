@@ -372,29 +372,47 @@ export default function HitForHit() {
   const createGame = async () => {
     const hn = sanitizeName(player1Name);
     if (!isValidName(hn)) return;
+    if (!isFirebaseConfigured) {
+      showToast("Firebase is not configured — check your .env file");
+      return;
+    }
+
     setConnStatus("syncing");
 
+    try {
+      await ensureAuth();
+    } catch (e) {
+      logClientError("Auth before create failed:", e);
+      setConnStatus("error");
+      showToast("Could not connect — enable Anonymous Auth in Firebase");
+      return;
+    }
+
     const generateUniqueCode = async () => {
-      let code;
-      let attempts = 0;
-
-      do {
-        code = generateCode();
-        const existing = await getGame(code);
-        attempts++;
-
-        if (attempts > 10) throw new Error("Could not generate unique code");
-      } while (existing !== null);
-
-      return code;
+      for (let attempts = 0; attempts < 10; attempts++) {
+        const code = generateCode();
+        let existing;
+        try {
+          existing = await getGame(code);
+        } catch (e) {
+          logClientError("Room code availability check failed:", e);
+          throw new Error("CHECK_FAILED");
+        }
+        if (existing === null) return code;
+      }
+      throw new Error("COLLISION_EXHAUSTED");
     };
 
     let code;
     try {
       code = await generateUniqueCode();
-    } catch {
+    } catch (e) {
       setConnStatus("error");
-      showToast("Could not generate a room code — try again.");
+      if (e?.message === "COLLISION_EXHAUSTED") {
+        showToast("Could not generate a room code — try again.");
+      } else {
+        showToast("Could not reach the game server — try again.");
+      }
       return;
     }
 
