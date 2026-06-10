@@ -13,6 +13,7 @@ import {
   getAppleMusicConfig,
 } from "./appleMusicToken.js";
 import { sendMusicKitTokenJson } from "./musickitToken.js";
+import { handleSpotifySearch } from "./spotifySearchHandler.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 const KEY_PREFIX = "h4h:";
@@ -163,6 +164,15 @@ const server = http.createServer(async (req, res) => {
         console.error("Apple Music search failed:", e);
         sendJson(res, 500, { error: "Something went wrong — please try again" });
       }
+      return;
+    }
+
+    if (url.pathname === "/api/spotify/search" && req.method === "GET") {
+      const result = await handleSpotifySearch(req, Object.fromEntries(url.searchParams));
+      if (result.cacheControl) {
+        res.setHeader("Cache-Control", result.cacheControl);
+      }
+      sendJson(res, result.status, result.body);
       return;
     }
 

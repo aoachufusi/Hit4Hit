@@ -35,8 +35,14 @@ export function normalizeGameState(g) {
           normalizeName(m) !== normalizeName(g.player2)
       );
     }
+    const {
+      spotifyAccessToken: _spotifyAccessToken,
+      spotifyTokenObtainedAt: _spotifyTokenObtainedAt,
+      spotifyTokenExpiresIn: _spotifyTokenExpiresIn,
+      ...rest
+    } = g;
     return {
-      ...g,
+      ...rest,
       hostName,
       members,
       judges,

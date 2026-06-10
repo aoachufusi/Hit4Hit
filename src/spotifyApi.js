@@ -11,14 +11,6 @@ export function clampSearchLimit(limit, fallback = 10) {
   return Math.min(10, Math.max(1, x));
 }
 
-export function isSharedSpotifyTokenValid(gs) {
-  if (!gs?.spotifyAccessToken || !gs.spotifyTokenObtainedAt || !gs.spotifyTokenExpiresIn) {
-    return false;
-  }
-  const expiresAt = gs.spotifyTokenObtainedAt + gs.spotifyTokenExpiresIn * 1000;
-  return Date.now() < expiresAt - 60_000;
-}
-
 export async function searchArtistsWithToken(token, q, limit = 10) {
   const lim = clampSearchLimit(limit, 10);
   const params = new URLSearchParams({

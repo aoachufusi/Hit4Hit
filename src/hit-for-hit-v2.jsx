@@ -34,12 +34,10 @@ import { ensureAuth } from "./firebase/auth.js";
 import { useSpotify } from "./useSpotify.js";
 import SongSearch from "./musickit/SongSearch.jsx";
 import { getInviteUrl } from "./appUrl.js";
-import { getStoredSession } from "./spotifyAuth.js";
 import {
-  isSharedSpotifyTokenValid,
-  searchArtistsWithToken,
-  searchTracksWithToken,
-} from "./spotifyApi.js";
+  searchSpotifyArtists as fetchSpotifyArtists,
+  searchSpotifyTracks as fetchSpotifyTracks,
+} from "./spotifySearchApi.js";
 import {
   MUSIC_PROVIDERS,
   musicProviderLabel,
@@ -910,7 +908,7 @@ export default function HitForHit() {
   const musicLabel = musicProviderLabel(activeMusicProvider);
   const musicServiceHint = usesAppleMusic
     ? "Everyone searches artists and songs via Apple Music."
-    : "Host logs in to Spotify once so everyone can search artists and songs.";
+    : "Everyone can search artists and songs. Host logs in to Spotify for playback.";
 
   const setGameMusicProvider = useCallback(
     async (provider) => {
@@ -938,7 +936,16 @@ export default function HitForHit() {
   const canManageAppleMusic = isHost && usesAppleMusic;
   const musicSearchReady = usesAppleMusic
     ? musicKitReady || appleSearchReady
-    : (isHost && spotify.loggedIn) || isSharedSpotifyTokenValid(gs);
+    : true;
+
+  const getHostSpotifyToken = useCallback(async () => {
+    if (!isHost || !spotify.loggedIn) return null;
+    try {
+      return await spotify.getAccessToken();
+    } catch {
+      return null;
+    }
+  }, [isHost, spotify]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1006,30 +1013,20 @@ export default function HitForHit() {
     }
   }, [showToast]);
 
-  const getSpotifySearchToken = useCallback(async () => {
-    if (isHost && spotify.loggedIn) {
-      return spotify.getAccessToken();
-    }
-    if (isSharedSpotifyTokenValid(gs)) {
-      return gs.spotifyAccessToken;
-    }
-    throw new Error("Host must log in to Spotify for search");
-  }, [gs, isHost, spotify]);
-
   const searchSpotifyArtists = useCallback(
     async (q) => {
-      const token = await getSpotifySearchToken();
-      return searchArtistsWithToken(token, q, 10);
+      const hostToken = await getHostSpotifyToken();
+      return fetchSpotifyArtists(q, 10, { hostToken });
     },
-    [getSpotifySearchToken]
+    [getHostSpotifyToken]
   );
 
   const searchSpotifyTracks = useCallback(
     async (q, artistName) => {
-      const token = await getSpotifySearchToken();
-      return searchTracksWithToken(token, q, 8, { artistName });
+      const hostToken = await getHostSpotifyToken();
+      return fetchSpotifyTracks(q, artistName, 8, { hostToken });
     },
-    [getSpotifySearchToken]
+    [getHostSpotifyToken]
   );
 
   const playbackEpochRef = useRef(0);
@@ -1150,50 +1147,9 @@ export default function HitForHit() {
     return () => clearTimeout(timer);
   }, [gs?.phase, gs?.code, gs?.playbackIndex, isJudge, openVoting]);
 
-  const hostSpotifyLogout = useCallback(async () => {
+  const hostSpotifyLogout = useCallback(() => {
     spotify.logout();
-    if (gs?.code && isHost) {
-      try {
-        await updateGame(gs.code, {
-          spotifyAccessToken: null,
-          spotifyTokenObtainedAt: null,
-          spotifyTokenExpiresIn: null,
-        });
-      } catch {
-        showToast("Could not clear shared Spotify access — try again.");
-      }
-    }
-  }, [gs?.code, isHost, spotify, showToast]);
-
-  useEffect(() => {
-    if (!isHost || !gs?.code || !spotify.loggedIn) return;
-
-    let cancelled = false;
-
-    const syncHostSpotifyToken = async () => {
-      try {
-        const token = await spotify.getAccessToken();
-        const session = getStoredSession();
-        if (!token || !session || cancelled) return;
-        await updateGame(gs.code, {
-          spotifyAccessToken: token,
-          spotifyTokenObtainedAt: session.obtained_at,
-          spotifyTokenExpiresIn: session.expires_in,
-        });
-      } catch (e) {
-        if (!cancelled) {
-          console.error("Failed to sync host Spotify token", e);
-        }
-      }
-    };
-
-    syncHostSpotifyToken();
-    const interval = setInterval(syncHostSpotifyToken, 5 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [isHost, gs?.code, spotify.loggedIn, spotify]);
+  }, [spotify]);
 
   const members = gs ? toArray(gs.members) : [];
   const judges = gs ? getActiveJudges(gs) : [];
@@ -1389,7 +1345,7 @@ export default function HitForHit() {
             ) : musicSearchReady ? (
               <span className="bf" style={{fontSize:10,color:MUTED1}}>{musicLabel} ✓</span>
             ) : (
-              <span className="bf" style={{fontSize:10,color:MUTED3}} title="Host logs in to Spotify for everyone">{musicLabel}</span>
+              <span className="bf" style={{fontSize:10,color:MUTED3}} title="Host logs in to Spotify for playback">{musicLabel}</span>
             )}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:4}} title="Game sync via Firebase Realtime Database">
@@ -1565,7 +1521,7 @@ export default function HitForHit() {
             {isHost && !usesAppleMusic && !spotify.loggedIn && (
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
                 <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
-                  Log in with Spotify above so everyone in the lobby can search artists and songs.
+                  Log in with Spotify above for song playback on your device.
                 </div>
               </div>
             )}
@@ -1578,14 +1534,12 @@ export default function HitForHit() {
               </div>
             )}
 
-            {!isHost && !musicSearchReady && (
+            {!isHost && usesAppleMusic && !musicSearchReady && (
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
                 <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
-                  {usesAppleMusic
-                    ? appleSearchReady
-                      ? "Apple Music search is ready."
-                      : "Waiting for Apple Music to load…"
-                    : "Waiting for the host to log in to Spotify…"}
+                  {appleSearchReady
+                    ? "Apple Music search is ready."
+                    : "Waiting for Apple Music to load…"}
                 </div>
               </div>
             )}
