@@ -46,8 +46,8 @@ export async function resolveTrackForPlayback(meta, label, artist, deps) {
   return meta ?? null;
 }
 
-export async function playRoundTrack(trackMeta, { playSpotifyUri } = {}) {
-  stopRoundPlayback();
+export async function playRoundTrack(trackMeta, { playSpotifyUri, pauseSpotify } = {}) {
+  await stopRoundPlayback({ pauseSpotify });
 
   if (trackMeta?.preview) {
     try {
@@ -87,11 +87,18 @@ export async function playRoundTrack(trackMeta, { playSpotifyUri } = {}) {
 playRoundTrack.activeAudio = null;
 playRoundTrack.activeMusic = null;
 
-export function stopRoundPlayback() {
+export async function stopRoundPlayback({ pauseSpotify } = {}) {
   stopPreview(playRoundTrack.activeAudio);
   playRoundTrack.activeAudio = null;
   stopAppleMusicPlayback();
   playRoundTrack.activeMusic = null;
+  if (pauseSpotify) {
+    try {
+      await pauseSpotify();
+    } catch (e) {
+      console.warn("Spotify pause failed", e);
+    }
+  }
 }
 
 export function waitForPlaybackEnd(result, onDone) {

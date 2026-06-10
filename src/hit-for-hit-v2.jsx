@@ -697,6 +697,13 @@ export default function HitForHit() {
     if (!gs?.code || !isHost || gs.phase !== PHASES.LISTENING) return;
     const idx = gs.playbackIndex ?? 0;
     const next = idx + 1;
+    const usesSpotify =
+      normalizeMusicProvider(gs?.musicProvider ?? musicProvider) !== MUSIC_PROVIDERS.APPLE;
+    const pauseSpotify =
+      usesSpotify && spotify.loggedIn && spotify.deviceId
+        ? () => spotify.pausePlayback()
+        : undefined;
+    await stopRoundPlayback({ pauseSpotify });
     try {
       if (next >= 2) {
         await updateGame(gs.code, { phase: PHASES.JUDGING, playbackIndex: 2 });
@@ -706,18 +713,33 @@ export default function HitForHit() {
     } catch {
       showToast("Failed to advance playback — try again");
     }
-  }, [gs?.code, gs?.phase, gs?.playbackIndex, isHost, showToast]);
+  }, [
+    gs?.code,
+    gs?.phase,
+    gs?.playbackIndex,
+    gs?.musicProvider,
+    musicProvider,
+    isHost,
+    showToast,
+    spotify,
+  ]);
 
   const openVoting = useCallback(async () => {
     if (!gs?.code || gs.phase !== PHASES.LISTENING) return;
     if (!isHost && !isGameJudge(gs, myName)) return;
+    const usesSpotify =
+      normalizeMusicProvider(gs?.musicProvider ?? musicProvider) !== MUSIC_PROVIDERS.APPLE;
+    const pauseSpotify =
+      usesSpotify && spotify.loggedIn && spotify.deviceId
+        ? () => spotify.pausePlayback()
+        : undefined;
     try {
-      stopRoundPlayback();
+      await stopRoundPlayback({ pauseSpotify });
       await updateGame(gs.code, { phase: PHASES.JUDGING, playbackIndex: 2 });
     } catch {
       showToast("Failed to open voting — try again");
     }
-  }, [gs, isHost, myName, showToast]);
+  }, [gs, isHost, myName, musicProvider, showToast, spotify]);
 
   // Host device moves PLAYING → LISTENING once both songs are locked in
   useEffect(() => {
@@ -1012,9 +1034,16 @@ export default function HitForHit() {
 
   const playbackEpochRef = useRef(0);
 
+  const roundPauseSpotify = useCallback(async () => {
+    if (usesAppleMusic || !spotify.loggedIn || !spotify.deviceId) return;
+    await spotify.pausePlayback();
+  }, [usesAppleMusic, spotify]);
+
   useEffect(() => {
     if (gs?.phase !== PHASES.LISTENING) {
-      stopRoundPlayback();
+      stopRoundPlayback({
+        pauseSpotify: usesAppleMusic ? undefined : roundPauseSpotify,
+      }).catch(() => {});
       return;
     }
 
@@ -1028,6 +1057,7 @@ export default function HitForHit() {
     let cancelled = false;
     const epoch = ++playbackEpochRef.current;
     let cleanupWait = () => {};
+    const pauseSpotify = usesAppleMusic ? undefined : roundPauseSpotify;
 
     (async () => {
       const meta = index === 0 ? gs.song1Meta : gs.song2Meta;
@@ -1048,6 +1078,7 @@ export default function HitForHit() {
             !usesAppleMusic && spotify.loggedIn && spotify.deviceId
               ? spotify.playUri
               : null,
+          pauseSpotify,
         });
         if (cancelled || playbackEpochRef.current !== epoch) return;
 
@@ -1081,7 +1112,7 @@ export default function HitForHit() {
     return () => {
       cancelled = true;
       cleanupWait();
-      stopRoundPlayback();
+      stopRoundPlayback({ pauseSpotify }).catch(() => {});
     };
   }, [
     gs?.phase,
@@ -1095,6 +1126,7 @@ export default function HitForHit() {
     isHost,
     myName,
     usesAppleMusic,
+    roundPauseSpotify,
     searchSpotifyTracks,
     spotify.loggedIn,
     spotify.deviceId,

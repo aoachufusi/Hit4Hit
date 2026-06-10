@@ -16,6 +16,7 @@ import {
 } from "./spotifyAuth.js";
 import {
   createSpotifyPlayer,
+  pausePlayback as pauseSpotifyDevice,
   playTrackUris,
   transferPlaybackToDevice,
 } from "./spotifyPlayer.js";
@@ -189,6 +190,17 @@ export function SpotifyProvider({ children }) {
     [deviceId, getAccessToken]
   );
 
+  const pausePlayback = useCallback(async () => {
+    try {
+      playerRef.current?.pause?.();
+    } catch {
+      /* ignore */
+    }
+    if (!deviceId) return;
+    const token = await getAccessToken();
+    await pauseSpotifyDevice(token, deviceId);
+  }, [deviceId, getAccessToken]);
+
   const value = useMemo(
     () => ({
       session,
@@ -201,6 +213,7 @@ export function SpotifyProvider({ children }) {
       searchTracks,
       searchArtists,
       playUri,
+      pausePlayback,
     }),
     [
       session,
@@ -212,6 +225,7 @@ export function SpotifyProvider({ children }) {
       searchTracks,
       searchArtists,
       playUri,
+      pausePlayback,
     ]
   );
 

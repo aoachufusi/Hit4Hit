@@ -92,3 +92,14 @@ export async function playTrackUris(accessToken, deviceId, uris) {
     body: JSON.stringify({ uris }),
   });
 }
+
+export async function pausePlayback(accessToken, deviceId) {
+  const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+  const res = await fetch(`https://api.spotify.com/v1/me/player/pause${qs}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (res.status === 404 || res.status === 204 || res.ok) return;
+  const text = await res.text();
+  throw new Error(`Spotify pause failed: ${res.status} ${text}`);
+}
