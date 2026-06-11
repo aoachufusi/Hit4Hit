@@ -240,17 +240,12 @@ export async function getArtistTopSongs(artistId) {
   }));
 }
 
-// ── Play a 30-second preview using a plain Audio element
-export async function playPreview(previewUrl) {
-  const audio = new Audio(previewUrl);
-  try {
-    await audio.play();
-  } catch (e) {
-    audio.pause();
-    throw e;
-  }
-  return audio;
-}
+export {
+  playPreviewAudio,
+  playPreview,
+  stopPreviewAudio,
+  stopPreview,
+} from "../previewAudio.js";
 
 function musicKitInstance() {
   try {
@@ -278,10 +273,4 @@ export function stopAppleMusicPlayback() {
   }
 }
 
-// ── Stop a playing preview
-export function stopPreview(audio) {
-  if (audio) {
-    audio.pause();
-    audio.currentTime = 0;
-  }
-}
+// ── Stop a playing preview (see previewAudio.js)

@@ -1076,10 +1076,15 @@ export default function HitForHit() {
               ? spotify.playUri
               : null,
           pauseSpotify,
+          preferFullTrack: usesAppleMusic
+            ? appleMusicConnected
+            : Boolean(spotify.loggedIn && spotify.deviceId),
         });
         if (cancelled || playbackEpochRef.current !== epoch) return;
 
-        if (result?.type === "none" && isHost) {
+        if (result?.type === "autoplay-blocked" && isHost) {
+          showToast("Tap to enable audio");
+        } else if (result?.type === "none" && isHost) {
           if (usesAppleMusic) {
             showToast("Couldn't play — host: connect Apple Music or pick from search");
           } else if (!spotify.loggedIn) {
@@ -1124,6 +1129,7 @@ export default function HitForHit() {
     myName,
     usesAppleMusic,
     roundPauseSpotify,
+    appleMusicConnected,
     searchSpotifyTracks,
     spotify.loggedIn,
     spotify.deviceId,

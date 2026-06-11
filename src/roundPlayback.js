@@ -46,39 +46,81 @@ export async function resolveTrackForPlayback(meta, label, artist, deps) {
   return meta ?? null;
 }
 
-export async function playRoundTrack(trackMeta, { playSpotifyUri, pauseSpotify } = {}) {
-  await stopRoundPlayback({ pauseSpotify });
-
-  if (trackMeta?.preview) {
-    try {
-      const audio = await playPreview(trackMeta.preview);
-      playRoundTrack.activeAudio = audio;
-      return { type: "preview", audio };
-    } catch (e) {
-      console.warn("Preview playback failed, trying full track", e);
+async function tryPlayPreview(trackMeta, limitSec = 30) {
+  if (!trackMeta?.preview) return null;
+  try {
+    const audio = await playPreview(trackMeta.preview, {
+      songId: trackMeta.id ?? trackMeta.uri ?? trackMeta.preview,
+      limitSec,
+    });
+    playRoundTrack.activeAudio = audio;
+    return { type: "preview", audio };
+  } catch (e) {
+    if (e?.name === "NotAllowedError") {
+      return { type: "autoplay-blocked" };
     }
-  }
-
-  if (
-    trackMeta?.uri &&
-    trackMeta.provider === MUSIC_PROVIDERS.APPLE
-  ) {
-    try {
-      const music = await playAppleMusicTrack(trackMeta.uri);
-      playRoundTrack.activeMusic = music;
-      return { type: "apple-music", music };
-    } catch (e) {
-      console.warn("Apple Music full playback failed", e);
+    if (e?.message !== "Preview superseded while buffering") {
+      console.warn("Preview playback failed", e);
     }
+    return null;
   }
+}
 
+async function tryPlayAppleFull(trackMeta) {
+  if (!trackMeta?.uri || trackMeta.provider !== MUSIC_PROVIDERS.APPLE) {
+    return null;
+  }
+  try {
+    const music = await playAppleMusicTrack(trackMeta.uri);
+    playRoundTrack.activeMusic = music;
+    return { type: "apple-music", music };
+  } catch (e) {
+    console.warn("Apple Music full playback failed", e);
+    return null;
+  }
+}
+
+async function tryPlaySpotifyFull(trackMeta, playSpotifyUri) {
   if (
-    trackMeta?.uri &&
-    trackMeta.provider === MUSIC_PROVIDERS.SPOTIFY &&
-    playSpotifyUri
+    !trackMeta?.uri ||
+    trackMeta.provider !== MUSIC_PROVIDERS.SPOTIFY ||
+    !playSpotifyUri
   ) {
+    return null;
+  }
+  try {
     await playSpotifyUri(trackMeta.uri);
     return { type: "spotify" };
+  } catch (e) {
+    console.warn("Spotify full playback failed", e);
+    return null;
+  }
+}
+
+export async function playRoundTrack(
+  trackMeta,
+  { playSpotifyUri, pauseSpotify, preferFullTrack = false, previewLimitSec = 30 } = {}
+) {
+  await stopRoundPlayback({ pauseSpotify });
+
+  const tryFull = async () => {
+    const apple = await tryPlayAppleFull(trackMeta);
+    if (apple) return apple;
+    return tryPlaySpotifyFull(trackMeta, playSpotifyUri);
+  };
+
+  if (preferFullTrack) {
+    const full = await tryFull();
+    if (full) return full;
+    const preview = await tryPlayPreview(trackMeta, previewLimitSec);
+    if (preview?.type === "autoplay-blocked") return preview;
+    if (preview) return preview;
+  } else {
+    const preview = await tryPlayPreview(trackMeta, previewLimitSec);
+    if (preview && preview.type !== "autoplay-blocked") return preview;
+    const full = await tryFull();
+    if (full) return full;
+    if (preview?.type === "autoplay-blocked") return preview;
   }
 
   return { type: "none" };
@@ -88,7 +130,7 @@ playRoundTrack.activeAudio = null;
 playRoundTrack.activeMusic = null;
 
 export async function stopRoundPlayback({ pauseSpotify } = {}) {
-  stopPreview(playRoundTrack.activeAudio);
+  await stopPreview();
   playRoundTrack.activeAudio = null;
   stopAppleMusicPlayback();
   playRoundTrack.activeMusic = null;
@@ -114,7 +156,7 @@ export function waitForPlaybackEnd(result, onDone) {
       onDone();
     };
     audio.addEventListener("ended", finish, { once: true });
-    const fallback = setTimeout(finish, 32_000);
+    const fallback = setTimeout(finish, 34_000);
     return () => {
       done = true;
       clearTimeout(fallback);
