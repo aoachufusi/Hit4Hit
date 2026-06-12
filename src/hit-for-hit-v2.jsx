@@ -1278,6 +1278,12 @@ export default function HitForHit() {
     .scoreboard-vs{color:${MUTED3};font-size:16px;text-align:center;padding:0 4px;white-space:nowrap;}
     .scoreboard-clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .conn-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+    .scoring-details summary{display:flex;align-items:center;gap:6px;list-style:none;}
+    .scoring-details summary::-webkit-details-marker{display:none;}
+    .scoring-details summary::marker{content:"";}
+    .scoring-details .scoring-chevron{font-size:11px;color:${MUTED3};line-height:1;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;}
+    .scoring-details .scoring-chevron::before{content:">";display:inline-block;transform:rotate(90deg);transition:transform .15s ease;}
+    .scoring-details[open] .scoring-chevron::before{transform:rotate(0deg);}
     .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#2a1750;border:1px solid #5b21b6;border-radius:8px;color:#e9d5ff;font-family:'Manrope',sans-serif;font-size:13px;padding:10px 20px;z-index:1000;white-space:nowrap;box-shadow:0 4px 24px #0007;}
   `;
 
@@ -1777,7 +1783,7 @@ export default function HitForHit() {
                     </div>
                   );
                 })()}
-                <details style={{marginBottom:roundHistory.length > 0 ? 12 : 0}}>
+                <details className="scoring-details" style={{marginBottom:roundHistory.length > 0 ? 12 : 0}}>
                   <summary
                     className="bf"
                     style={{
@@ -1785,10 +1791,10 @@ export default function HitForHit() {
                       fontSize:11,
                       color:MUTED2,
                       letterSpacing:".04em",
-                      listStyle:"none",
                       userSelect:"none",
                     }}
                   >
+                    <span className="scoring-chevron" aria-hidden="true" />
                     Scoring System
                   </summary>
                   <div className="bf" style={{fontSize:11,color:MUTED1,lineHeight:1.55,marginTop:8,paddingTop:8,borderTop:`1px solid ${BORDER}`}}>
