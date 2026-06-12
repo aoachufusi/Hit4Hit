@@ -1030,14 +1030,104 @@ export default function HitForHit() {
   );
 
   const playbackEpochRef = useRef(0);
+  const hostPlaybackResolvedRef = useRef(null);
+  const playbackCleanupRef = useRef(() => {});
+  const [hostAwaitingTap, setHostAwaitingTap] = useState(false);
 
   const roundPauseSpotify = useCallback(async () => {
     if (usesAppleMusic || !spotify.loggedIn || !spotify.deviceId) return;
     await spotify.pausePlayback();
   }, [usesAppleMusic, spotify]);
 
+  const startHostPlayback = useCallback(async () => {
+    if (!gs?.code || !isHost || gs.phase !== PHASES.LISTENING) return;
+    const index = gs.playbackIndex ?? 0;
+    if (index >= 2) return;
+
+    const epoch = ++playbackEpochRef.current;
+    const pauseSpotify = usesAppleMusic ? undefined : roundPauseSpotify;
+
+    let resolved = hostPlaybackResolvedRef.current;
+    if (!resolved) {
+      const meta = index === 0 ? gs.song1Meta : gs.song2Meta;
+      const label = index === 0 ? gs.song1 : gs.song2;
+      const artist = index === 0 ? gs.artist1 : gs.artist2;
+      resolved = await resolveTrackForPlayback(meta, label, artist, {
+        usesAppleMusic,
+        searchSpotifyTracks,
+      });
+      hostPlaybackResolvedRef.current = resolved;
+    }
+
+    if (playbackEpochRef.current !== epoch) return;
+
+    playbackCleanupRef.current?.();
+    playbackCleanupRef.current = () => {};
+
+    try {
+      const result = await playRoundTrack(resolved, {
+        playSpotifyUri:
+          !usesAppleMusic && spotify.loggedIn && spotify.deviceId
+            ? spotify.playUri
+            : null,
+        pauseSpotify,
+        preferFullTrack: usesAppleMusic
+          ? appleMusicConnected
+          : Boolean(spotify.loggedIn && spotify.deviceId),
+      });
+      if (playbackEpochRef.current !== epoch) return;
+
+      if (result?.type === "autoplay-blocked") {
+        setHostAwaitingTap(true);
+        return;
+      }
+      if (result?.type === "none") {
+        if (usesAppleMusic) {
+          showToast("Couldn't play — connect Apple Music or pick from search");
+        } else if (!spotify.loggedIn) {
+          showToast("Couldn't play — log in to Spotify");
+        } else if (!spotify.deviceId) {
+          showToast("Couldn't play — wait for Spotify player to connect");
+        } else {
+          showToast("Couldn't play this song — pick a track from search results");
+        }
+        setHostAwaitingTap(true);
+        return;
+      }
+
+      setHostAwaitingTap(false);
+      playbackCleanupRef.current = waitForPlaybackEnd(result, () => {
+        if (playbackEpochRef.current === epoch) {
+          advancePlayback();
+        }
+      });
+    } catch (e) {
+      logClientError("Round playback failed:", e);
+      setHostAwaitingTap(true);
+      playbackCleanupRef.current = waitForPlaybackEnd(null, () => {
+        if (playbackEpochRef.current === epoch) {
+          advancePlayback();
+        }
+      });
+    }
+  }, [
+    gs,
+    isHost,
+    usesAppleMusic,
+    appleMusicConnected,
+    roundPauseSpotify,
+    searchSpotifyTracks,
+    spotify,
+    advancePlayback,
+    showToast,
+  ]);
+
   useEffect(() => {
     if (gs?.phase !== PHASES.LISTENING) {
+      setHostAwaitingTap(false);
+      hostPlaybackResolvedRef.current = null;
+      playbackCleanupRef.current?.();
+      playbackCleanupRef.current = () => {};
       stopRoundPlayback({
         pauseSpotify: usesAppleMusic ? undefined : roundPauseSpotify,
       }).catch(() => {});
@@ -1045,76 +1135,37 @@ export default function HitForHit() {
     }
 
     const index = gs.playbackIndex ?? 0;
-    if (index >= 2) {
-      if (isHost) advancePlayback();
-      else if (isGameJudge(gs, myName)) openVoting();
-      return;
-    }
+    if (!isHost || index >= 2) return;
 
     let cancelled = false;
-    const epoch = ++playbackEpochRef.current;
-    let cleanupWait = () => {};
-    const pauseSpotify = usesAppleMusic ? undefined : roundPauseSpotify;
+    setHostAwaitingTap(true);
+    hostPlaybackResolvedRef.current = null;
+    playbackCleanupRef.current?.();
+    playbackCleanupRef.current = () => {};
+    stopRoundPlayback({
+      pauseSpotify: usesAppleMusic ? undefined : roundPauseSpotify,
+    }).catch(() => {});
 
     (async () => {
       const meta = index === 0 ? gs.song1Meta : gs.song2Meta;
       const label = index === 0 ? gs.song1 : gs.song2;
       const artist = index === 0 ? gs.artist1 : gs.artist2;
-
-      if (!isHost) return;
-
       const resolved = await resolveTrackForPlayback(meta, label, artist, {
         usesAppleMusic,
         searchSpotifyTracks,
       });
-      if (cancelled || playbackEpochRef.current !== epoch) return;
-
-      try {
-        const result = await playRoundTrack(resolved, {
-          playSpotifyUri:
-            !usesAppleMusic && spotify.loggedIn && spotify.deviceId
-              ? spotify.playUri
-              : null,
-          pauseSpotify,
-          preferFullTrack: usesAppleMusic
-            ? appleMusicConnected
-            : Boolean(spotify.loggedIn && spotify.deviceId),
-        });
-        if (cancelled || playbackEpochRef.current !== epoch) return;
-
-        if (result?.type === "autoplay-blocked" && isHost) {
-          showToast("Tap to enable audio");
-        } else if (result?.type === "none" && isHost) {
-          if (usesAppleMusic) {
-            showToast("Couldn't play — host: connect Apple Music or pick from search");
-          } else if (!spotify.loggedIn) {
-            showToast("Couldn't play — host must log in to Spotify");
-          } else if (!spotify.deviceId) {
-            showToast("Couldn't play — wait for Spotify player to connect");
-          } else {
-            showToast("Couldn't play this song — pick a track from search results");
-          }
-        }
-
-        if (isHost) {
-          cleanupWait = waitForPlaybackEnd(result, () => {
-            if (!cancelled && playbackEpochRef.current === epoch) {
-              advancePlayback();
-            }
-          });
-        }
-      } catch (e) {
-        console.error("Round playback failed", e);
-        if (isHost && !cancelled) {
-          cleanupWait = waitForPlaybackEnd(null, advancePlayback);
-        }
+      if (!cancelled) {
+        hostPlaybackResolvedRef.current = resolved;
       }
     })();
 
     return () => {
       cancelled = true;
-      cleanupWait();
-      stopRoundPlayback({ pauseSpotify }).catch(() => {});
+      playbackCleanupRef.current?.();
+      playbackCleanupRef.current = () => {};
+      stopRoundPlayback({
+        pauseSpotify: usesAppleMusic ? undefined : roundPauseSpotify,
+      }).catch(() => {});
     };
   }, [
     gs?.phase,
@@ -1126,20 +1177,19 @@ export default function HitForHit() {
     gs?.artist1,
     gs?.artist2,
     isHost,
-    myName,
     usesAppleMusic,
     roundPauseSpotify,
-    appleMusicConnected,
     searchSpotifyTracks,
-    spotify.loggedIn,
-    spotify.deviceId,
-    spotify.playUri,
-    advancePlayback,
-    openVoting,
-    showToast,
   ]);
 
-  // Safety net: host auto-advances if playback stalls
+  useEffect(() => {
+    if (gs?.phase !== PHASES.LISTENING) return;
+    const index = gs.playbackIndex ?? 0;
+    if (index < 2) return;
+    if (isHost) advancePlayback();
+    else if (isGameJudge(gs, myName)) openVoting();
+  }, [gs?.phase, gs?.playbackIndex, isHost, myName, gs, advancePlayback, openVoting]);
+
   useEffect(() => {
     if (!isHost || gs?.phase !== PHASES.LISTENING) return;
     const timer = setTimeout(() => advancePlayback(), 45_000);
@@ -1905,14 +1955,20 @@ export default function HitForHit() {
                   </div>
                   <div className="bf" style={{color:MUTED3,fontSize:12,marginTop:8}}>
                     {(gs.playbackIndex ?? 0) === 0
-                      ? `Now playing: ${players[0]}'s pick`
+                      ? isHost && hostAwaitingTap
+                        ? `Up next: ${players[0]}'s pick`
+                        : `Now playing: ${players[0]}'s pick`
                       : (gs.playbackIndex ?? 0) === 1
-                        ? `Now playing: ${players[1]}'s pick`
+                        ? isHost && hostAwaitingTap
+                          ? `Up next: ${players[1]}'s pick`
+                          : `Now playing: ${players[1]}'s pick`
                         : "Get ready to vote…"}
                   </div>
                   <div className="bf" style={{color:MUTED3,fontSize:11,marginTop:6,lineHeight:1.45}}>
                     {isHost
-                      ? "You control playback — keep this tab open with volume up."
+                      ? hostAwaitingTap
+                        ? "Tap the button below to start playback on your device."
+                        : "You control playback — keep this tab open with volume up."
                       : "Audio plays on the host's device only."}
                   </div>
                 </div>
@@ -1942,9 +1998,14 @@ export default function HitForHit() {
                           {songDisplayTitle(gs, i, players)}
                         </div>
                         <div className="bf" style={{color:MUTED2,fontSize:11,marginTop:4}}>{players[i]}</div>
-                        {playing && (
+                        {playing && !(isHost && hostAwaitingTap) && (
                           <div className="pulse bf" style={{color:COLORS[i],fontSize:11,marginTop:8}}>
                             ▶ Now playing
+                          </div>
+                        )}
+                        {playing && isHost && hostAwaitingTap && (
+                          <div className="bf" style={{color:MUTED2,fontSize:11,marginTop:8}}>
+                            Ready to play
                           </div>
                         )}
                         {done && !playing && (
@@ -1954,6 +2015,24 @@ export default function HitForHit() {
                     );
                   })}
                 </div>
+
+                {isHost && hostAwaitingTap && (gs.playbackIndex ?? 0) < 2 && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{
+                      width: "100%",
+                      background: C,
+                      color: "#0D0A14",
+                      fontSize: 22,
+                      marginBottom: 12,
+                      letterSpacing: ".06em",
+                    }}
+                    onClick={() => startHostPlayback()}
+                  >
+                    ▶ TAP TO PLAY
+                  </button>
+                )}
 
                 {isHost && (
                   <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:8}}>
