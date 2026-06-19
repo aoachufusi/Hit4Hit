@@ -34,7 +34,7 @@ export default function handler(req, res) {
 
   try {
     const token = createMusicKitToken();
-    res.setHeader("Cache-Control", "s-maxage=3600");
+    res.setHeader("Cache-Control", "private, max-age=300");
     res.status(200).json({ token, developerToken: token });
   } catch (error) {
     console.error("Token generation failed:", error);

@@ -28,7 +28,7 @@ export function sendMusicKitTokenJson(res, sendJson) {
     const { developerToken, expiresAt } = createAppleMusicDeveloperToken({
       expSeconds: MUSIC_KIT_TOKEN_TTL_SECONDS,
     });
-    res.setHeader("Cache-Control", "s-maxage=3600");
+    res.setHeader("Cache-Control", "private, max-age=300");
     sendJson(res, 200, {
       token: developerToken,
       developerToken,

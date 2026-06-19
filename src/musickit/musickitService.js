@@ -54,9 +54,26 @@ export async function configureMusicKit(developerToken) {
   return MusicKit.getInstance();
 }
 
+/** Fetch a fresh developer JWT and apply it to the running MusicKit instance. */
+export async function refreshMusicKitDeveloperToken() {
+  const developerToken = await getDeveloperToken();
+  const MusicKit = await waitForMusicKitGlobal();
+  let music;
+  try {
+    music = MusicKit.getInstance();
+  } catch {
+    music = null;
+  }
+  if (music) {
+    music.developerToken = developerToken;
+    return music;
+  }
+  return configureMusicKit(developerToken);
+}
+
 // ── Authorize the host — prompts Apple Music login popup
 export async function authorizeHost() {
-  const music     = MusicKit.getInstance();
+  const music = await refreshMusicKitDeveloperToken();
   const userToken = await music.authorize();
   return userToken;
 }
@@ -257,7 +274,7 @@ function musicKitInstance() {
 
 /** Full Apple Music playback (host must be authorized). */
 export async function playAppleMusicTrack(catalogSongId) {
-  const music = musicKitInstance();
+  const music = await refreshMusicKitDeveloperToken();
   if (!music?.isAuthorized) {
     throw new Error("Apple Music not authorized");
   }
