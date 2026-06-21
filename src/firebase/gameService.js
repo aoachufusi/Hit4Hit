@@ -2,7 +2,7 @@ import {
   ref, set, get, update, onValue,
 } from "firebase/database";
 import { db, isFirebaseConfigured } from "./config.js";
-import { ensureAuth } from "./auth.js";
+import { ensureAuthWithRetry } from "./auth.js";
 
 async function requireDb() {
   if (!isFirebaseConfigured || !db) {
@@ -10,7 +10,7 @@ async function requireDb() {
       "Firebase is not configured. Check VITE_FIREBASE_* in .env and restart the dev server."
     );
   }
-  await ensureAuth();
+  await ensureAuthWithRetry();
   return db;
 }
 

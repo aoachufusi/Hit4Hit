@@ -1,44 +1,99 @@
-import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signInAnonymously } from "firebase/auth";
 import { app } from "./config.js";
 
 const auth = app ? getAuth(app) : null;
 
-let authReady = null;
+const AUTH_TIMEOUT_MS = 15_000;
 
-export async function ensureAuth() {
+let authInFlight = null;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms);
+    }),
+  ]);
+}
+
+/** Clear cached Firebase auth (fixes stuck anonymous sessions in browser storage). */
+export async function clearAuthSession() {
+  if (!auth) return;
+  authInFlight = null;
+  try {
+    await auth.signOut();
+  } catch (err) {
+    console.warn("Firebase signOut failed", err);
+  }
+}
+
+async function signInFresh() {
+  const result = await withTimeout(
+    signInAnonymously(auth),
+    AUTH_TIMEOUT_MS,
+    "AUTH"
+  );
+  return result.user;
+}
+
+export async function ensureAuth({ forceRefresh = false } = {}) {
   if (!auth) {
     throw new Error(
       "Firebase is not configured. Check VITE_FIREBASE_* in .env and restart the dev server."
     );
   }
 
-  if (auth.currentUser) {
-    return auth.currentUser;
+  if (forceRefresh) {
+    await clearAuthSession();
   }
 
-  if (!authReady) {
-    authReady = new Promise((resolve, reject) => {
-      const unsubscribe = onAuthStateChanged(auth, async (user) => {
-        if (user) {
-          unsubscribe();
-          resolve(user);
-          return;
-        }
+  if (auth.currentUser && !forceRefresh) {
+    try {
+      await withTimeout(auth.currentUser.getIdToken(false), AUTH_TIMEOUT_MS, "TOKEN");
+      return auth.currentUser;
+    } catch (err) {
+      console.warn("Stale Firebase session, signing in again", err);
+      await clearAuthSession();
+    }
+  }
 
-        try {
-          const result = await signInAnonymously(auth);
-          unsubscribe();
-          resolve(result.user);
-        } catch (err) {
-          unsubscribe();
-          authReady = null;
-          reject(err);
-        }
-      });
+  if (!authInFlight) {
+    authInFlight = signInFresh().finally(() => {
+      authInFlight = null;
     });
   }
 
-  return authReady;
+  return authInFlight;
+}
+
+/** Sign in with timeout; on failure, clear storage and retry once. */
+export async function ensureAuthWithRetry() {
+  try {
+    return await ensureAuth();
+  } catch (first) {
+    console.warn("Firebase auth failed, retrying after sign-out", first);
+    return ensureAuth({ forceRefresh: true });
+  }
+}
+
+/** User-facing hint when Firebase auth or RTDB connection fails. */
+export function formatFirebaseConnectError(err) {
+  const code = err?.code || "";
+  const msg = String(err?.message || err || "");
+
+  if (msg.includes("TIMEOUT") || code === "auth/network-request-failed") {
+    return "Connection timed out — disable ad blockers for this site or clear site data and refresh";
+  }
+  if (code === "auth/unauthorized-domain") {
+    return "This site isn't authorized in Firebase — add your domain under Authentication → Settings";
+  }
+  if (code === "auth/operation-not-allowed") {
+    return "Enable Anonymous sign-in in Firebase Authentication";
+  }
+  if (/permission_denied|Permission denied/i.test(msg)) {
+    return "Could not reach the game server — try again";
+  }
+  return "Failed to connect — try again or use a private/incognito window";
 }
 
 export function getCurrentUser() {

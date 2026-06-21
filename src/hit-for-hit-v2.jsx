@@ -30,7 +30,10 @@ import {
   deleteGame,
 } from "./firebase/gameService.js";
 import { isFirebaseConfigured } from "./firebase/config.js";
-import { ensureAuth } from "./firebase/auth.js";
+import {
+  ensureAuthWithRetry,
+  formatFirebaseConnectError,
+} from "./firebase/auth.js";
 import { useSpotify } from "./useSpotify.js";
 import SongSearch from "./musickit/SongSearch.jsx";
 import { getInviteUrl } from "./appUrl.js";
@@ -264,26 +267,52 @@ export default function HitForHit() {
     if (unsubRef.current) unsubRef.current();
     unsubRef.current = null;
 
-    subscribeToGame(
-      code,
-      (fresh) => {
-        try {
-          setGs(normalizeGameState(fresh));
-          setConnStatus("ok");
-        } catch (e) {
-          console.error("Game state sync failed", e);
-          setConnStatus("error");
-        }
-      },
-      () => setConnStatus("error")
-    )
-      .then((unsub) => {
+    const attach = async (retried = false) => {
+      try {
+        const unsub = await subscribeToGame(
+          code,
+          (fresh) => {
+            try {
+              setGs(normalizeGameState(fresh));
+              setConnStatus("ok");
+            } catch (e) {
+              console.error("Game state sync failed", e);
+              setConnStatus("error");
+            }
+          },
+          async (err) => {
+            console.error("subscribeToGame error", err);
+            if (!retried) {
+              try {
+                await ensureAuthWithRetry();
+                await attach(true);
+              } catch (retryErr) {
+                console.error("subscribeToGame retry failed", retryErr);
+                setConnStatus("error");
+              }
+              return;
+            }
+            setConnStatus("error");
+          }
+        );
         unsubRef.current = unsub;
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error("subscribeToGame failed", err);
+        if (!retried) {
+          try {
+            await ensureAuthWithRetry();
+            await attach(true);
+          } catch (retryErr) {
+            console.error("subscribeToGame retry failed", retryErr);
+            setConnStatus("error");
+          }
+          return;
+        }
         setConnStatus("error");
-      });
+      }
+    };
+
+    attach();
   }, []);
 
   useEffect(() => {
@@ -293,7 +322,7 @@ export default function HitForHit() {
   }, []);
 
   useEffect(() => {
-    ensureAuth().then((user) => {
+    ensureAuthWithRetry().then((user) => {
       setUserId(user.uid);
     }).catch((err) => {
       console.error("Firebase anonymous auth failed", err);
@@ -379,11 +408,11 @@ export default function HitForHit() {
     setConnStatus("syncing");
 
     try {
-      await ensureAuth();
+      await ensureAuthWithRetry();
     } catch (e) {
       logClientError("Auth before create failed:", e);
       setConnStatus("error");
-      showToast("Could not connect — enable Anonymous Auth in Firebase");
+      showToast(formatFirebaseConnectError(e), 4000);
       return;
     }
 
@@ -483,8 +512,9 @@ export default function HitForHit() {
     let raw;
     try {
       raw = await getGame(code);
-    } catch {
-      setJoinError("Failed to load game — try again");
+    } catch (e) {
+      logClientError("Join load failed:", e);
+      setJoinError(formatFirebaseConnectError(e));
       setConnStatus("error");
       return;
     }
@@ -551,9 +581,10 @@ export default function HitForHit() {
 
     try {
       await updateGame(code, patch);
-    } catch {
-      setJoinError("Failed to join — try again");
-      setConnStatus("ok");
+    } catch (e) {
+      logClientError("Join write failed:", e);
+      setJoinError(formatFirebaseConnectError(e));
+      setConnStatus("error");
       return;
     }
 
