@@ -20,7 +20,11 @@ import {
   artistsMatch,
   isArtistBlocked,
 } from "./gameStateUtils.js";
-import { logClientError, GENERIC_USER_ERROR } from "./utils/userError.js";
+import {
+  logClientError,
+  GENERIC_USER_ERROR,
+  formatAppleMusicConnectError,
+} from "./utils/userError.js";
 import {
   createGame as firebaseCreateGame,
   getGame,
@@ -1030,14 +1034,7 @@ export default function HitForHit() {
       showToast("Apple Music connected");
     } catch (e) {
       logClientError("Apple Music connect failed:", e);
-      const msg = String(e?.message || e);
-      if (/expired|invalid.*token|OAuth/i.test(msg)) {
-        showToast("Apple Music session expired — try Connect again");
-      } else if (/not configured|503|credentials/i.test(msg)) {
-        showToast("Apple Music is not configured on the server");
-      } else {
-        showToast(GENERIC_USER_ERROR);
-      }
+      showToast(formatAppleMusicConnectError(e), 4500);
     }
   }, [screen, myName, myRole, joinCode, player1Name, gs?.code, showToast]);
 

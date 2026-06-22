@@ -74,8 +74,18 @@ export async function refreshMusicKitDeveloperToken() {
 // ── Authorize the host — prompts Apple Music login popup
 export async function authorizeHost() {
   const music = await refreshMusicKitDeveloperToken();
-  const userToken = await music.authorize();
-  return userToken;
+  try {
+    const userToken = await music.authorize();
+    if (!userToken) {
+      throw new Error("Apple sign-in returned no user token");
+    }
+    return userToken;
+  } catch (err) {
+    const detail = err?.message || err?.name || String(err);
+    const wrapped = new Error(detail);
+    wrapped.code = err?.code || err?.name;
+    throw wrapped;
+  }
 }
 
 // ── Unauthorize — signs the host out
