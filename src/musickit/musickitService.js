@@ -63,20 +63,9 @@ export async function configureMusicKit(developerToken) {
   return MusicKit.getInstance();
 }
 
-/** Fetch a fresh developer JWT and apply it to the running MusicKit instance. */
+/** Fetch a fresh developer JWT and re-configure MusicKit (v3: developerToken is read-only on the instance). */
 export async function refreshMusicKitDeveloperToken() {
   const developerToken = await getDeveloperToken();
-  const MusicKit = await waitForMusicKitGlobal();
-  let music;
-  try {
-    music = MusicKit.getInstance();
-  } catch {
-    music = null;
-  }
-  if (music) {
-    music.developerToken = developerToken;
-    return music;
-  }
   return configureMusicKit(developerToken);
 }
 
