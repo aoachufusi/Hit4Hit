@@ -56,11 +56,36 @@ export function getAppleMusicConfig() {
       process.env.APPLE_MUSIC_PRIVATE_KEY ||
       ""
   );
-  const origin = process.env.APPLE_MUSIC_ORIGIN?.trim();
+  const originRaw = process.env.APPLE_MUSIC_ORIGIN?.trim();
 
   if (!teamId || !keyId || !privateKey) return null;
 
-  return { teamId, keyId, privateKey, origin: origin || undefined };
+  return { teamId, keyId, privateKey, origin: originRaw || undefined };
+}
+
+/** Apple expects origin as a string array; supports comma-separated env values. */
+export function parseAppleMusicOrigins(originRaw) {
+  if (!originRaw) return undefined;
+  const origins = originRaw
+    .split(",")
+    .map((s) => s.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+  if (origins.length === 0) return undefined;
+
+  const expanded = new Set(origins);
+  for (const origin of origins) {
+    try {
+      const url = new URL(origin);
+      if (url.hostname.startsWith("www.")) {
+        expanded.add(`${url.protocol}//${url.hostname.slice(4)}`);
+      } else {
+        expanded.add(`${url.protocol}//www.${url.hostname}`);
+      }
+    } catch {
+      /* keep literal values only */
+    }
+  }
+  return [...expanded];
 }
 
 /** @returns {{ developerToken: string, expiresAt: number }} */
@@ -79,7 +104,8 @@ export function createAppleMusicDeveloperToken(options = {}) {
     iat: now,
     exp: now + expSeconds,
   };
-  if (config.origin) payload.origin = config.origin;
+  const origins = parseAppleMusicOrigins(config.origin);
+  if (origins?.length) payload.origin = origins;
 
   const unsigned = `${base64UrlEncode(header)}.${base64UrlEncode(payload)}`;
   const signature = crypto.sign("sha256", Buffer.from(unsigned), {

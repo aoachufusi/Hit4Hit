@@ -4,6 +4,7 @@ import {
   normalizeArtistName,
   pickBestArtistMatch,
 } from "../musicSearchUtils.js";
+import { clearMusicKitStoredAuth, extractErrorMessage } from "./musickitErrors.js";
 
 export async function getDeveloperToken() {
   const res = await fetch("/api/musickit-token");
@@ -40,16 +41,24 @@ function waitForMusicKitGlobal() {
   });
 }
 
+function musicKitAppConfig() {
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "";
+  return {
+    name: "Hit 4 Hit",
+    build: "1.0.0",
+    version: "1.0.0",
+    ...(origin ? { icon: `${origin}/favicon.svg` } : {}),
+  };
+}
+
 // ── Configure MusicKit — call once when the app loads
 export async function configureMusicKit(developerToken) {
   const MusicKit = await waitForMusicKitGlobal();
   await MusicKit.configure({
     developerToken,
-    app: {
-      name: "Hit 4 Hit",
-      build: "1.0.0",
-      version: "1.0.0",
-    },
+    storefrontId: "us",
+    app: musicKitAppConfig(),
   });
   return MusicKit.getInstance();
 }
@@ -73,6 +82,7 @@ export async function refreshMusicKitDeveloperToken() {
 
 // ── Authorize the host — prompts Apple Music login popup
 export async function authorizeHost() {
+  clearMusicKitStoredAuth();
   const music = await refreshMusicKitDeveloperToken();
   try {
     const userToken = await music.authorize();
@@ -81,7 +91,7 @@ export async function authorizeHost() {
     }
     return userToken;
   } catch (err) {
-    const detail = err?.message || err?.name || String(err);
+    const detail = extractErrorMessage(err) || "Apple Music authorization failed";
     const wrapped = new Error(detail);
     wrapped.code = err?.code || err?.name;
     throw wrapped;
@@ -90,8 +100,10 @@ export async function authorizeHost() {
 
 // ── Unauthorize — signs the host out
 export async function unauthorizeHost() {
+  const MusicKit = await waitForMusicKitGlobal();
   const music = MusicKit.getInstance();
   await music.unauthorize();
+  clearMusicKitStoredAuth();
 }
 
 // ── Internal helper — Apple artwork URLs use {w}x{h} placeholders
