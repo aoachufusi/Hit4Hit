@@ -54,7 +54,7 @@ async function tryPlayPreview(trackMeta, limitSec = 30) {
       limitSec,
     });
     playRoundTrack.activeAudio = audio;
-    return { type: "preview", audio };
+  return { type: "preview", audio };
   } catch (e) {
     if (e?.name === "NotAllowedError") {
       return { type: "autoplay-blocked" };
@@ -165,7 +165,8 @@ export function waitForPlaybackEnd(result, onDone) {
   }
 
   if (result?.type === "spotify") {
-    const timer = setTimeout(onDone, 3 * 60 * 1000);
+    const durationMs = result.durationMs ?? 8 * 60 * 1000;
+    const timer = setTimeout(onDone, Math.min(durationMs + 5000, 12 * 60 * 1000));
     return () => clearTimeout(timer);
   }
 
@@ -181,15 +182,26 @@ export function waitForPlaybackEnd(result, onDone) {
     };
     const onStateChange = () => {
       const PS = window.MusicKit?.PlaybackStates;
-      if (
-        music.playbackState === PS?.ended ||
-        music.playbackState === PS?.stopped
-      ) {
+      const endedStates = [PS?.ended, PS?.stopped, PS?.completed].filter(
+        (s) => s != null
+      );
+      if (endedStates.includes(music.playbackState)) {
         finish();
       }
     };
     music.addEventListener("playbackStateDidChange", onStateChange);
-    const fallback = setTimeout(finish, 3 * 60 * 1000);
+    const item = music.nowPlayingItem;
+    const durationMs =
+      item?.attributes?.durationInMillis ??
+      (music.currentPlaybackDuration > 0
+        ? music.currentPlaybackDuration * 1000
+        : 0) ??
+      0;
+    const fallbackMs =
+      durationMs > 0
+        ? Math.min(durationMs + 8000, 12 * 60 * 1000)
+        : 8 * 60 * 1000;
+    const fallback = setTimeout(finish, fallbackMs);
     return () => {
       done = true;
       clearTimeout(fallback);

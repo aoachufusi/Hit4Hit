@@ -1227,15 +1227,15 @@ export default function HitForHit() {
   }, [gs?.phase, gs?.playbackIndex, isHost, myName, gs, advancePlayback, openVoting]);
 
   useEffect(() => {
-    if (!isHost || gs?.phase !== PHASES.LISTENING) return;
-    const timer = setTimeout(() => advancePlayback(), 45_000);
+    if (!isHost || gs?.phase !== PHASES.LISTENING || !hostAwaitingTap) return;
+    const timer = setTimeout(() => advancePlayback(), 3 * 60 * 1000);
     return () => clearTimeout(timer);
-  }, [isHost, gs?.phase, gs?.playbackIndex, advancePlayback]);
+  }, [isHost, gs?.phase, gs?.playbackIndex, hostAwaitingTap, advancePlayback]);
 
   // Judges can open voting if the host never advances past listening
   useEffect(() => {
     if (!gs || gs.phase !== PHASES.LISTENING || !isJudge) return;
-    const timer = setTimeout(() => openVoting(), 75_000);
+    const timer = setTimeout(() => openVoting(), 20 * 60 * 1000);
     return () => clearTimeout(timer);
   }, [gs?.phase, gs?.code, gs?.playbackIndex, isJudge, openVoting]);
 
