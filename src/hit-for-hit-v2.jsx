@@ -1069,6 +1069,7 @@ export default function HitForHit() {
   const playbackEpochRef = useRef(0);
   const hostPlaybackResolvedRef = useRef(null);
   const playbackCleanupRef = useRef(() => {});
+  const listeningPrepIndexRef = useRef(-1);
   const searchSpotifyTracksRef = useRef(searchSpotifyTracks);
   searchSpotifyTracksRef.current = searchSpotifyTracks;
   const [hostAwaitingTap, setHostAwaitingTap] = useState(false);
@@ -1146,8 +1147,15 @@ export default function HitForHit() {
         return;
       }
       if (result?.type === "none") {
+        logClientError("Playback returned none", { resolved, usesAppleMusic, appleMusicConnected });
         if (usesAppleMusic) {
-          showToast("Couldn't play — connect Apple Music or pick from search");
+          if (!appleMusicConnected) {
+            showToast("Couldn't play — tap Connect Apple Music first");
+          } else if (!resolved?.uri) {
+            showToast("Couldn't play — pick each song from search results");
+          } else {
+            showToast("Couldn't play — try Connect again or pick another track");
+          }
         } else if (!spotify.loggedIn) {
           showToast("Couldn't play — log in to Spotify");
         } else if (!spotify.deviceId) {
@@ -1160,6 +1168,9 @@ export default function HitForHit() {
       }
 
       setHostAwaitingTap(false);
+      if (result.type === "preview") {
+        showToast("Playing preview (30s) — connect Apple Music for full songs", 3500);
+      }
       playbackCleanupRef.current = waitForPlaybackEnd(result, () => {
         if (playbackEpochRef.current === epoch) {
           advancePlayback();
@@ -1186,6 +1197,7 @@ export default function HitForHit() {
 
   useEffect(() => {
     if (gs?.phase !== PHASES.LISTENING) {
+      listeningPrepIndexRef.current = -1;
       setHostAwaitingTap(false);
       hostPlaybackResolvedRef.current = null;
       playbackCleanupRef.current?.();
@@ -1198,6 +1210,9 @@ export default function HitForHit() {
 
     const index = gs.playbackIndex ?? 0;
     if (!isHost || index >= 2) return;
+
+    if (listeningPrepIndexRef.current === index) return;
+    listeningPrepIndexRef.current = index;
 
     let cancelled = false;
     setHostAwaitingTap(true);
@@ -1220,20 +1235,13 @@ export default function HitForHit() {
 
     return () => {
       cancelled = true;
-      playbackCleanupRef.current?.();
-      playbackCleanupRef.current = () => {};
     };
   }, [
     gs?.phase,
     gs?.playbackIndex,
-    gs?.song1,
-    gs?.song2,
-    gs?.song1Meta,
-    gs?.song2Meta,
-    gs?.artist1,
-    gs?.artist2,
     isHost,
     usesAppleMusic,
+    roundPauseSpotify,
   ]);
 
   useEffect(() => {

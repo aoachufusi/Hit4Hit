@@ -300,25 +300,72 @@ export async function playAppleMusicTrack(catalogSongId) {
     throw new Error("Missing Apple Music song id — pick the track from search");
   }
 
-  const playOn = async (music) => {
+  const startPlayback = async (music) => {
     if (!music?.isAuthorized) {
       throw new Error("Apple Music not authorized — tap Connect again");
     }
-    // setQueue + startPlaying in one call — avoid stop()/play() races (PLAY_ACTIVITY)
-    await music.setQueue({ song: songId, startPlaying: true });
+
+    try {
+      await music.setQueue({ song: songId, startPlaying: true });
+    } catch {
+      await music.setQueue({ song: songId });
+      await music.play();
+    }
+
+    if (!music.isPlaying) {
+      await music.play();
+    }
+
+    const playing = await waitUntilPlaying(music, 5000);
+    if (!playing) {
+      throw new Error(
+        "Apple Music did not start — check subscription, volume, and try Connect again"
+      );
+    }
     return music;
   };
 
   try {
-    return await playOn(await ensureConfiguredMusicKit());
+    return await startPlayback(await ensureConfiguredMusicKit());
   } catch (first) {
     const msg = extractErrorMessage(first);
     if (!/token|expired|401|developer/i.test(msg)) {
       throw first;
     }
     const music = await refreshMusicKitDeveloperToken();
-    return playOn(music);
+    return startPlayback(music);
   }
+}
+
+function waitUntilPlaying(music, timeoutMs) {
+  return new Promise((resolve) => {
+    if (music?.isPlaying) {
+      resolve(true);
+      return;
+    }
+    const deadline = Date.now() + timeoutMs;
+    const PS = window.MusicKit?.PlaybackStates;
+    const onChange = () => {
+      if (music.isPlaying || music.playbackState === PS?.playing) {
+        cleanup();
+        resolve(true);
+      }
+    };
+    const timer = setInterval(() => {
+      if (music.isPlaying || music.playbackState === PS?.playing) {
+        cleanup();
+        resolve(true);
+      } else if (Date.now() >= deadline) {
+        cleanup();
+        resolve(false);
+      }
+    }, 150);
+    const cleanup = () => {
+      clearInterval(timer);
+      music.removeEventListener("playbackStateDidChange", onChange);
+    };
+    music.addEventListener("playbackStateDidChange", onChange);
+  });
 }
 
 export function stopAppleMusicPlayback() {

@@ -204,7 +204,10 @@ export function waitForPlaybackEnd(result, onDone) {
 
   if (result?.type === "apple-music" && result.music) {
     const music = result.music;
+    const PS = window.MusicKit?.PlaybackStates;
     let done = false;
+    let sawPlaying = Boolean(music.isPlaying);
+
     const finish = () => {
       if (done) return;
       done = true;
@@ -212,28 +215,35 @@ export function waitForPlaybackEnd(result, onDone) {
       clearTimeout(fallback);
       onDone();
     };
+
     const onStateChange = () => {
-      const PS = window.MusicKit?.PlaybackStates;
-      const endedStates = [PS?.ended, PS?.stopped, PS?.completed].filter(
-        (s) => s != null
-      );
-      if (endedStates.includes(music.playbackState)) {
+      if (music.isPlaying || music.playbackState === PS?.playing) {
+        sawPlaying = true;
+        return;
+      }
+      if (!sawPlaying) return;
+      if (
+        music.playbackState === PS?.ended ||
+        music.playbackState === PS?.completed
+      ) {
         finish();
       }
     };
+
     music.addEventListener("playbackStateDidChange", onStateChange);
+
     const item = music.nowPlayingItem;
     const durationMs =
       item?.attributes?.durationInMillis ??
       (music.currentPlaybackDuration > 0
         ? music.currentPlaybackDuration * 1000
-        : 0) ??
-      0;
+        : 0);
     const fallbackMs =
       durationMs > 0
         ? Math.min(durationMs + 8000, 12 * 60 * 1000)
         : 8 * 60 * 1000;
     const fallback = setTimeout(finish, fallbackMs);
+
     return () => {
       done = true;
       clearTimeout(fallback);
