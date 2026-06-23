@@ -738,7 +738,7 @@ export default function HitForHit() {
       usesSpotify && spotify.loggedIn && spotify.deviceId
         ? () => spotify.pausePlayback()
         : undefined;
-    await stopRoundPlayback({ pauseSpotify });
+    await stopRoundPlayback({ pauseSpotify, resetApple: next >= 2 });
     try {
       if (next >= 2) {
         await updateGame(gs.code, { phase: PHASES.JUDGING, playbackIndex: 2 });
@@ -1104,6 +1104,17 @@ export default function HitForHit() {
     playbackCleanupRef.current = () => {};
 
     try {
+      if (usesAppleMusic && appleMusicConnected) {
+        const MusicKit = window.MusicKit;
+        const music = MusicKit?.getInstance?.();
+        if (music && !music.isAuthorized) {
+          setAppleMusicConnected(false);
+          showToast("Apple Music session expired — tap Connect again", 4500);
+          setHostAwaitingTap(true);
+          return;
+        }
+      }
+
       const result = await playRoundTrack(resolved, {
         playSpotifyUri:
           !usesAppleMusic && spotify.loggedIn && spotify.deviceId

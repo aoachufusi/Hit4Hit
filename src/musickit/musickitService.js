@@ -57,7 +57,7 @@ export async function configureMusicKit(developerToken) {
   const MusicKit = await waitForMusicKitGlobal();
   await MusicKit.configure({
     developerToken,
-    storefrontId: "us",
+    suppressErrorDialog: true,
     app: musicKitAppConfig(),
   });
   return MusicKit.getInstance();
@@ -302,10 +302,10 @@ export async function playAppleMusicTrack(catalogSongId) {
 
   const playOn = async (music) => {
     if (!music?.isAuthorized) {
-      throw new Error("Apple Music not authorized");
+      throw new Error("Apple Music not authorized — tap Connect again");
     }
-    await music.setQueue({ song: songId });
-    await music.play();
+    // setQueue + startPlaying in one call — avoid stop()/play() races (PLAY_ACTIVITY)
+    await music.setQueue({ song: songId, startPlaying: true });
     return music;
   };
 
@@ -313,7 +313,7 @@ export async function playAppleMusicTrack(catalogSongId) {
     return await playOn(await ensureConfiguredMusicKit());
   } catch (first) {
     const msg = extractErrorMessage(first);
-    if (!/token|expired|authorized|configure|401/i.test(msg)) {
+    if (!/token|expired|401|developer/i.test(msg)) {
       throw first;
     }
     const music = await refreshMusicKitDeveloperToken();
@@ -323,8 +323,26 @@ export async function playAppleMusicTrack(catalogSongId) {
 
 export function stopAppleMusicPlayback() {
   const music = musicKitInstance();
-  if (music?.isPlaying) {
-    music.stop();
+  if (!music) return;
+  try {
+    if (music.isPlaying) {
+      music.pause();
+    }
+  } catch (e) {
+    console.warn("Apple Music pause failed", e);
+  }
+}
+
+/** Hard stop when leaving the listening phase entirely. */
+export function resetAppleMusicPlayback() {
+  const music = musicKitInstance();
+  if (!music) return;
+  try {
+    if (music.isPlaying) {
+      music.stop();
+    }
+  } catch (e) {
+    console.warn("Apple Music reset failed", e);
   }
 }
 

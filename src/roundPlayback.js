@@ -5,6 +5,7 @@ import {
   stopPreview,
   playAppleMusicTrack,
   stopAppleMusicPlayback,
+  resetAppleMusicPlayback,
 } from "./musickit/musickitService.js";
 
 export function extractSongTitle(label) {
@@ -54,7 +55,7 @@ async function tryPlayPreview(trackMeta, limitSec = 30) {
       limitSec,
     });
     playRoundTrack.activeAudio = audio;
-  return { type: "preview", audio };
+    return { type: "preview", audio };
   } catch (e) {
     if (e?.name === "NotAllowedError") {
       return { type: "autoplay-blocked" };
@@ -109,7 +110,16 @@ export async function playRoundTrack(
     activeProvider,
   } = {}
 ) {
-  await stopRoundPlayback({ pauseSpotify });
+  // Stop previews / Spotify only — do not music.stop() before Apple setQueue (PLAY_ACTIVITY)
+  await stopPreview();
+  playRoundTrack.activeAudio = null;
+  if (pauseSpotify) {
+    try {
+      await pauseSpotify();
+    } catch (e) {
+      console.warn("Spotify pause failed", e);
+    }
+  }
 
   const meta = trackMeta
     ? { ...trackMeta, provider: trackMeta.provider ?? activeProvider }
@@ -127,11 +137,11 @@ export async function playRoundTrack(
 
   if (preferFullTrack) {
     const full = await tryFull();
-    if (full?.type === "error") return full;
-    if (full) return full;
+    if (full && full.type !== "error") return full;
     const preview = await tryPlayPreview(meta, previewLimitSec);
     if (preview?.type === "autoplay-blocked") return preview;
     if (preview) return preview;
+    if (full?.type === "error") return full;
   } else {
     const preview = await tryPlayPreview(meta, previewLimitSec);
     if (preview && preview.type !== "autoplay-blocked") return preview;
@@ -147,10 +157,14 @@ export async function playRoundTrack(
 playRoundTrack.activeAudio = null;
 playRoundTrack.activeMusic = null;
 
-export async function stopRoundPlayback({ pauseSpotify } = {}) {
+export async function stopRoundPlayback({ pauseSpotify, resetApple = true } = {}) {
   await stopPreview();
   playRoundTrack.activeAudio = null;
-  stopAppleMusicPlayback();
+  if (resetApple) {
+    resetAppleMusicPlayback();
+  } else {
+    stopAppleMusicPlayback();
+  }
   playRoundTrack.activeMusic = null;
   if (pauseSpotify) {
     try {
