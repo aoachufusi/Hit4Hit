@@ -25,6 +25,7 @@ import {
   GENERIC_USER_ERROR,
   formatAppleMusicConnectError,
 } from "./utils/userError.js";
+import { extractErrorMessage } from "./musickit/musickitErrors.js";
 import {
   createGame as firebaseCreateGame,
   getGame,
@@ -1068,6 +1069,8 @@ export default function HitForHit() {
   const playbackEpochRef = useRef(0);
   const hostPlaybackResolvedRef = useRef(null);
   const playbackCleanupRef = useRef(() => {});
+  const searchSpotifyTracksRef = useRef(searchSpotifyTracks);
+  searchSpotifyTracksRef.current = searchSpotifyTracks;
   const [hostAwaitingTap, setHostAwaitingTap] = useState(false);
 
   const roundPauseSpotify = useCallback(async () => {
@@ -1090,7 +1093,7 @@ export default function HitForHit() {
       const artist = index === 0 ? gs.artist1 : gs.artist2;
       resolved = await resolveTrackForPlayback(meta, label, artist, {
         usesAppleMusic,
-        searchSpotifyTracks,
+        searchSpotifyTracks: searchSpotifyTracksRef.current,
       });
       hostPlaybackResolvedRef.current = resolved;
     }
@@ -1110,8 +1113,22 @@ export default function HitForHit() {
         preferFullTrack: usesAppleMusic
           ? appleMusicConnected
           : Boolean(spotify.loggedIn && spotify.deviceId),
+        activeProvider: activeMusicProvider,
       });
       if (playbackEpochRef.current !== epoch) return;
+
+      if (result?.type === "error") {
+        const detail = extractErrorMessage(result.error);
+        logClientError("Round playback failed:", result.error);
+        showToast(
+          detail.length <= 120
+            ? detail
+            : "Playback failed — try Connect again or pick from search",
+          4500
+        );
+        setHostAwaitingTap(true);
+        return;
+      }
 
       if (result?.type === "autoplay-blocked") {
         setHostAwaitingTap(true);
@@ -1139,21 +1156,19 @@ export default function HitForHit() {
       });
     } catch (e) {
       logClientError("Round playback failed:", e);
+      showToast(
+        extractErrorMessage(e) || "Playback failed — try again",
+        4500
+      );
       setHostAwaitingTap(true);
-      playbackCleanupRef.current = waitForPlaybackEnd(null, () => {
-        if (playbackEpochRef.current === epoch) {
-          advancePlayback();
-        }
-      });
     }
   }, [
     gs,
     isHost,
     usesAppleMusic,
     appleMusicConnected,
+    activeMusicProvider,
     roundPauseSpotify,
-    searchSpotifyTracks,
-    spotify,
     advancePlayback,
     showToast,
   ]);
@@ -1178,9 +1193,6 @@ export default function HitForHit() {
     hostPlaybackResolvedRef.current = null;
     playbackCleanupRef.current?.();
     playbackCleanupRef.current = () => {};
-    stopRoundPlayback({
-      pauseSpotify: usesAppleMusic ? undefined : roundPauseSpotify,
-    }).catch(() => {});
 
     (async () => {
       const meta = index === 0 ? gs.song1Meta : gs.song2Meta;
@@ -1188,7 +1200,7 @@ export default function HitForHit() {
       const artist = index === 0 ? gs.artist1 : gs.artist2;
       const resolved = await resolveTrackForPlayback(meta, label, artist, {
         usesAppleMusic,
-        searchSpotifyTracks,
+        searchSpotifyTracks: searchSpotifyTracksRef.current,
       });
       if (!cancelled) {
         hostPlaybackResolvedRef.current = resolved;
@@ -1199,9 +1211,6 @@ export default function HitForHit() {
       cancelled = true;
       playbackCleanupRef.current?.();
       playbackCleanupRef.current = () => {};
-      stopRoundPlayback({
-        pauseSpotify: usesAppleMusic ? undefined : roundPauseSpotify,
-      }).catch(() => {});
     };
   }, [
     gs?.phase,
@@ -1214,8 +1223,6 @@ export default function HitForHit() {
     gs?.artist2,
     isHost,
     usesAppleMusic,
-    roundPauseSpotify,
-    searchSpotifyTracks,
   ]);
 
   useEffect(() => {

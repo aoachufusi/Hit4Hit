@@ -66,8 +66,9 @@ async function tryPlayPreview(trackMeta, limitSec = 30) {
   }
 }
 
-async function tryPlayAppleFull(trackMeta) {
-  if (!trackMeta?.uri || trackMeta.provider !== MUSIC_PROVIDERS.APPLE) {
+async function tryPlayAppleFull(trackMeta, activeProvider) {
+  const provider = trackMeta?.provider ?? activeProvider;
+  if (!trackMeta?.uri || provider !== MUSIC_PROVIDERS.APPLE) {
     return null;
   }
   try {
@@ -76,14 +77,15 @@ async function tryPlayAppleFull(trackMeta) {
     return { type: "apple-music", music };
   } catch (e) {
     console.warn("Apple Music full playback failed", e);
-    return null;
+    throw e;
   }
 }
 
-async function tryPlaySpotifyFull(trackMeta, playSpotifyUri) {
+async function tryPlaySpotifyFull(trackMeta, playSpotifyUri, activeProvider) {
+  const provider = trackMeta?.provider ?? activeProvider;
   if (
     !trackMeta?.uri ||
-    trackMeta.provider !== MUSIC_PROVIDERS.SPOTIFY ||
+    provider !== MUSIC_PROVIDERS.SPOTIFY ||
     !playSpotifyUri
   ) {
     return null;
@@ -93,32 +95,48 @@ async function tryPlaySpotifyFull(trackMeta, playSpotifyUri) {
     return { type: "spotify" };
   } catch (e) {
     console.warn("Spotify full playback failed", e);
-    return null;
+    throw e;
   }
 }
 
 export async function playRoundTrack(
   trackMeta,
-  { playSpotifyUri, pauseSpotify, preferFullTrack = false, previewLimitSec = 30 } = {}
+  {
+    playSpotifyUri,
+    pauseSpotify,
+    preferFullTrack = false,
+    previewLimitSec = 30,
+    activeProvider,
+  } = {}
 ) {
   await stopRoundPlayback({ pauseSpotify });
 
+  const meta = trackMeta
+    ? { ...trackMeta, provider: trackMeta.provider ?? activeProvider }
+    : null;
+
   const tryFull = async () => {
-    const apple = await tryPlayAppleFull(trackMeta);
-    if (apple) return apple;
-    return tryPlaySpotifyFull(trackMeta, playSpotifyUri);
+    try {
+      const apple = await tryPlayAppleFull(meta, activeProvider);
+      if (apple) return apple;
+      return await tryPlaySpotifyFull(meta, playSpotifyUri, activeProvider);
+    } catch (e) {
+      return { type: "error", error: e };
+    }
   };
 
   if (preferFullTrack) {
     const full = await tryFull();
+    if (full?.type === "error") return full;
     if (full) return full;
-    const preview = await tryPlayPreview(trackMeta, previewLimitSec);
+    const preview = await tryPlayPreview(meta, previewLimitSec);
     if (preview?.type === "autoplay-blocked") return preview;
     if (preview) return preview;
   } else {
-    const preview = await tryPlayPreview(trackMeta, previewLimitSec);
+    const preview = await tryPlayPreview(meta, previewLimitSec);
     if (preview && preview.type !== "autoplay-blocked") return preview;
     const full = await tryFull();
+    if (full?.type === "error") return full;
     if (full) return full;
     if (preview?.type === "autoplay-blocked") return preview;
   }

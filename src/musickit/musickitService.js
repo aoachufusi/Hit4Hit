@@ -63,10 +63,20 @@ export async function configureMusicKit(developerToken) {
   return MusicKit.getInstance();
 }
 
-/** Fetch a fresh developer JWT and re-configure MusicKit (v3: developerToken is read-only on the instance). */
+/** Re-configure MusicKit with a fresh developer token (connect / token refresh). */
 export async function refreshMusicKitDeveloperToken() {
   const developerToken = await getDeveloperToken();
   return configureMusicKit(developerToken);
+}
+
+async function ensureConfiguredMusicKit() {
+  const MusicKit = await waitForMusicKitGlobal();
+  try {
+    return MusicKit.getInstance();
+  } catch {
+    const developerToken = await getDeveloperToken();
+    return configureMusicKit(developerToken);
+  }
 }
 
 // ── Authorize the host — prompts Apple Music login popup
@@ -285,13 +295,30 @@ function musicKitInstance() {
 
 /** Full Apple Music playback (host must be authorized). */
 export async function playAppleMusicTrack(catalogSongId) {
-  const music = await refreshMusicKitDeveloperToken();
-  if (!music?.isAuthorized) {
-    throw new Error("Apple Music not authorized");
+  const songId = String(catalogSongId || "").trim();
+  if (!songId) {
+    throw new Error("Missing Apple Music song id — pick the track from search");
   }
-  await music.setQueue({ song: catalogSongId });
-  await music.play();
-  return music;
+
+  const playOn = async (music) => {
+    if (!music?.isAuthorized) {
+      throw new Error("Apple Music not authorized");
+    }
+    await music.setQueue({ song: songId });
+    await music.play();
+    return music;
+  };
+
+  try {
+    return await playOn(await ensureConfiguredMusicKit());
+  } catch (first) {
+    const msg = extractErrorMessage(first);
+    if (!/token|expired|authorized|configure|401/i.test(msg)) {
+      throw first;
+    }
+    const music = await refreshMusicKitDeveloperToken();
+    return playOn(music);
+  }
 }
 
 export function stopAppleMusicPlayback() {
