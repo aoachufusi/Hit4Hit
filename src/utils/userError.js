@@ -27,8 +27,8 @@ export function formatAppleMusicConnectError(err) {
   if (/expired|invalid.*token|OAuth/i.test(msg)) {
     return "Apple Music session expired — try Connect again";
   }
-  if (/popup|blocked|user cancel|denied|abort/i.test(msg)) {
-    return "Apple sign-in was blocked or cancelled — allow popups for this site";
+  if (/popup|blocked|user activation|user cancel|denied|abort/i.test(msg)) {
+    return "Safari blocked the Apple sign-in window — tap Connect again (don't switch tabs first). Or Safari → Settings → Websites → Pop-up Windows → Allow for hit4hit.app";
   }
   if (/network|fetch|failed to load/i.test(msg)) {
     return "Could not reach Apple Music — check your connection or ad blockers";

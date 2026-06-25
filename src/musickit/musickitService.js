@@ -79,7 +79,39 @@ async function ensureConfiguredMusicKit() {
   }
 }
 
-// ── Authorize the host — prompts Apple Music login popup
+// ── Authorize the host — must run synchronously from a click (Safari blocks delayed popups)
+export function authorizeHostFromUserGesture() {
+  if (typeof window === "undefined" || !window.MusicKit) {
+    return Promise.reject(
+      new Error("MusicKit not loaded — wait a moment and try again")
+    );
+  }
+
+  clearMusicKitStoredAuth();
+
+  let music;
+  try {
+    music = window.MusicKit.getInstance();
+  } catch {
+    return Promise.reject(
+      new Error("MusicKit not ready — wait for Apple Music to finish loading")
+    );
+  }
+
+  return music.authorize().then((userToken) => {
+    if (!userToken) {
+      throw new Error("Apple sign-in returned no user token");
+    }
+    return userToken;
+  }).catch((err) => {
+    const detail = extractErrorMessage(err) || "Apple Music authorization failed";
+    const wrapped = new Error(detail);
+    wrapped.code = err?.code || err?.name;
+    throw wrapped;
+  });
+}
+
+/** Full authorize with token refresh — only for retries, not button clicks. */
 export async function authorizeHost() {
   clearMusicKitStoredAuth();
   const music = await refreshMusicKitDeveloperToken();

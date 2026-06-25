@@ -63,10 +63,9 @@ import {
 import ArtistSearch from "./musickit/ArtistSearch.jsx";
 import MusicProviderPicker from "./musickit/MusicProviderPicker.jsx";
 import {
-  authorizeHost,
+  authorizeHostFromUserGesture,
   configureMusicKit,
   getDeveloperToken,
-  refreshMusicKitDeveloperToken,
   unauthorizeHost,
 } from "./musickit/musickitService.js";
 
@@ -1090,24 +1089,26 @@ export default function HitForHit() {
     };
   }, []);
 
-  const connectAppleMusic = useCallback(async () => {
-    try {
-      saveAppRestore({
-        screen,
-        myName,
-        myRole,
-        joinCode,
-        player1Name,
-        gameCode: gs?.code || null,
+  const connectAppleMusic = useCallback(() => {
+    saveAppRestore({
+      screen,
+      myName,
+      myRole,
+      joinCode,
+      player1Name,
+      gameCode: gs?.code || null,
+    });
+    // authorize() must run in the same turn as the click — Safari blocks popups after await
+    authorizeHostFromUserGesture()
+      .then(() => {
+        setAppleMusicConnected(true);
+        setMusicKitReady(true);
+        showToast("Apple Music connected");
+      })
+      .catch((e) => {
+        logClientError("Apple Music connect failed:", e);
+        showToast(formatAppleMusicConnectError(e), 4500);
       });
-      await authorizeHost();
-      setAppleMusicConnected(true);
-      setMusicKitReady(true);
-      showToast("Apple Music connected");
-    } catch (e) {
-      logClientError("Apple Music connect failed:", e);
-      showToast(formatAppleMusicConnectError(e), 4500);
-    }
   }, [screen, myName, myRole, joinCode, player1Name, gs?.code, showToast]);
 
   const disconnectAppleMusic = useCallback(async () => {
