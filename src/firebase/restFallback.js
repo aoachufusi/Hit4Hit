@@ -5,7 +5,7 @@ import { withTimeout } from "./promiseUtils.js";
 
 const auth = app ? getAuth(app) : null;
 
-function databaseBaseUrl() {
+export function databaseBaseUrl() {
   const url = String(import.meta.env.VITE_FIREBASE_DATABASE_URL || "").replace(
     /\/$/,
     ""
@@ -21,13 +21,49 @@ async function restAuthParam() {
   return encodeURIComponent(await user.getIdToken());
 }
 
+function restUrl(path, token, extraParams = "") {
+  const cleanPath = String(path || "").replace(/^\/+|\/+$/g, "");
+  const suffix = extraParams ? `&${extraParams}` : "";
+  return `${databaseBaseUrl()}/${cleanPath}.json?auth=${token}${suffix}`;
+}
+
+/** Unauthenticated ping — 401/403 means the RTDB host is reachable. */
+export async function restPingHost(timeoutMs = 6000) {
+  if (!isFirebaseConfigured) return false;
+  try {
+    const url = `${databaseBaseUrl()}/games.json?shallow=true&limitToFirst=1`;
+    const res = await withTimeout(fetch(url), timeoutMs, "REST_PING");
+    return res.status === 401 || res.status === 403 || res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Authenticated read probe — .info/* is SDK-only, so use games/. */
+export async function restProbeRead(timeoutMs = 10_000) {
+  if (!isFirebaseConfigured) {
+    throw new Error("Firebase is not configured");
+  }
+  const token = await restAuthParam();
+  const url = restUrl("games", token, "shallow=true");
+  const res = await withTimeout(fetch(url), timeoutMs, "REST_PROBE");
+  if (res.status === 401 || res.status === 403) {
+    throw new Error("Permission denied — enable Anonymous auth in Firebase");
+  }
+  if (!res.ok) {
+    throw new Error(`REST_PROBE_${res.status}`);
+  }
+  await res.json();
+  return true;
+}
+
 /** HTTPS read when the Firebase SDK WebSocket/long-poll path is blocked. */
 export async function restGet(path, timeoutMs = 15_000) {
   if (!isFirebaseConfigured) {
     throw new Error("Firebase is not configured");
   }
   const token = await restAuthParam();
-  const url = `${databaseBaseUrl()}/${path}.json?auth=${token}`;
+  const url = restUrl(path, token);
   const res = await withTimeout(fetch(url), timeoutMs, "REST_GET");
   if (res.status === 401 || res.status === 403) {
     throw new Error("Permission denied");
@@ -44,7 +80,7 @@ export async function restSet(path, value, timeoutMs = 15_000) {
     throw new Error("Firebase is not configured");
   }
   const token = await restAuthParam();
-  const url = `${databaseBaseUrl()}/${path}.json?auth=${token}`;
+  const url = restUrl(path, token);
   const res = await withTimeout(
     fetch(url, {
       method: "PUT",
@@ -69,7 +105,7 @@ export async function restPatch(path, patch, timeoutMs = 15_000) {
     throw new Error("Firebase is not configured");
   }
   const token = await restAuthParam();
-  const url = `${databaseBaseUrl()}/${path}.json?auth=${token}`;
+  const url = restUrl(path, token);
   const res = await withTimeout(
     fetch(url, {
       method: "PATCH",

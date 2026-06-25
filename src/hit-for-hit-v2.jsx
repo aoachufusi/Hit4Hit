@@ -43,7 +43,7 @@ import {
   isLikelyChrome,
 } from "./firebase/auth.js";
 import { runFirebaseDiagnostics } from "./firebase/diagnostics.js";
-import { reconnectDatabase } from "./firebase/dbConnection.js";
+import { nudgeDatabaseOnline } from "./firebase/dbConnection.js";
 import SyncDiagnosticsPanel from "./firebase/SyncDiagnosticsPanel.jsx";
 import { useSpotify } from "./useSpotify.js";
 import SongSearch from "./musickit/SongSearch.jsx";
@@ -422,7 +422,7 @@ export default function HitForHit() {
     try {
       await hardResetAuthSession();
       resetDbReady();
-      reconnectDatabase();
+      nudgeDatabaseOnline();
       await ensureAuthWithRetry();
       const raw = await getGame(code);
       if (raw) applyGameSnapshot(raw);

@@ -5,16 +5,25 @@ import { withTimeout } from "./promiseUtils.js";
 import {
   waitForDatabaseOnline,
   nudgeDatabaseOnline,
-  reconnectDatabase,
   probeDatabaseRest,
+  probeDatabaseHost,
 } from "./dbConnection.js";
-import { restGet } from "./restFallback.js";
+import { databaseBaseUrl, restGet } from "./restFallback.js";
 import { isLikelyChrome } from "./browserUtils.js";
 
 function formatErr(err) {
   const code = err?.code || "";
   const msg = String(err?.message || err || "Unknown error");
   return code && !msg.includes(code) ? `${code}: ${msg}` : msg;
+}
+
+function maskDbHost() {
+  try {
+    const host = new URL(databaseBaseUrl()).host;
+    return host.replace(/^(.{4}).*(.{8})$/, "$1…$2");
+  } catch {
+    return "unknown";
+  }
 }
 
 /**
@@ -43,7 +52,7 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
     );
     return { ok: false, steps, at: Date.now() };
   }
-  push("config", "Firebase config", true, "Build has Firebase env vars");
+  push("config", "Firebase config", true, `DB host ${maskDbHost()}`);
 
   try {
     const user = await withTimeout(ensureAuthWithRetry(), 15_000, "AUTH_DIAG");
@@ -58,24 +67,45 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
     return { ok: false, steps, at: Date.now() };
   }
 
+  const hostReachable = await probeDatabaseHost(8000);
+  push(
+    "db-host",
+    "Database host (HTTPS)",
+    hostReachable,
+    hostReachable
+      ? "Reachable"
+      : "Cannot reach Firebase — check network, VPN, or DATABASE_URL"
+  );
+
+  nudgeDatabaseOnline();
+
+  let dbMode = null;
   try {
-    reconnectDatabase();
-    nudgeDatabaseOnline();
-    const conn = await waitForDatabaseOnline(18_000, { allowRestFallback: false });
+    const conn = await waitForDatabaseOnline(12_000, { allowRestFallback: true });
+    dbMode = conn.mode;
     const modeLabel =
       conn.mode === "socket"
         ? "Connected (live socket)"
         : conn.mode === "sdk-read"
           ? "Connected (SDK read)"
-          : "Connected";
+          : "Connected (HTTPS fallback)";
     push("database", "Realtime Database", true, modeLabel);
   } catch (err) {
     const restOk = await probeDatabaseRest(10_000);
     if (restOk) {
+      dbMode = "rest";
       const hint = isLikelyChrome()
-        ? "Live socket blocked — disable ad blockers/extensions for this site, or try Safari. HTTPS reads OK."
-        : "Live socket blocked — check network/VPN. HTTPS reads OK.";
-      push("database", "Realtime Database", false, hint);
+        ? "Live socket blocked — game uses HTTPS polling. Disable extensions or try Safari."
+        : "Live socket blocked — game uses HTTPS polling.";
+      push("database", "Realtime Database", true, hint);
+    } else if (hostReachable) {
+      push(
+        "database",
+        "Realtime Database",
+        false,
+        "Host reachable but reads failed — check Firebase rules and Anonymous auth"
+      );
+      return { ok: false, steps, at: Date.now() };
     } else {
       push("database", "Realtime Database", false, formatErr(err));
       return { ok: false, steps, at: Date.now() };
@@ -87,7 +117,7 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
     try {
       const snap = await withTimeout(
         get(ref(db, `games/${code}`)),
-        15_000,
+        12_000,
         "READ_GAME"
       );
       push(
@@ -109,6 +139,13 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
         push("game", `Game ${code}`, false, formatErr(err));
       }
     }
+  } else if (dbMode === "rest") {
+    try {
+      await restGet("games", 8_000);
+      push("database-read", "Database read", true, "Server reachable (REST)");
+    } catch (err) {
+      push("database-read", "Database read", false, formatErr(err));
+    }
   } else {
     try {
       await withTimeout(
@@ -119,7 +156,7 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
       push("database-read", "Database read", true, "Server reachable");
     } catch (err) {
       try {
-        await restGet(".info/serverTimeOffset", 8_000);
+        await restGet("games", 8_000);
         push("database-read", "Database read", true, "Server reachable (REST)");
       } catch {
         push("database-read", "Database read", false, formatErr(err));

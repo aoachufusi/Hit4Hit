@@ -4,7 +4,7 @@ import {
 import { db, isFirebaseConfigured } from "./config.js";
 import { ensureAuthWithRetry } from "./auth.js";
 import { withTimeout } from "./promiseUtils.js";
-import { waitForDatabaseOnline, reconnectDatabase } from "./dbConnection.js";
+import { waitForDatabaseOnline, nudgeDatabaseOnline } from "./dbConnection.js";
 import { restGet, restSet, restPatch } from "./restFallback.js";
 
 const DB_TIMEOUT_MS = 20_000;
@@ -28,7 +28,7 @@ async function ensureDbReady() {
   if (!dbReadyPromise) {
     dbReadyPromise = ensureAuthWithRetry()
       .then(async () => {
-        reconnectDatabase();
+        nudgeDatabaseOnline();
         return waitForDatabaseOnline(18_000, { allowRestFallback: true });
       })
       .catch((err) => {

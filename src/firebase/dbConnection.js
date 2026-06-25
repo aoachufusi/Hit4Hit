@@ -1,6 +1,6 @@
-import { ref, onValue, get, goOnline, goOffline } from "firebase/database";
+import { ref, onValue, get, goOnline } from "firebase/database";
 import { db } from "./config.js";
-import { restGet } from "./restFallback.js";
+import { restPingHost, restProbeRead } from "./restFallback.js";
 
 /** Kick the RTDB client to reconnect (safe to call before waiting on .info/connected). */
 export function nudgeDatabaseOnline() {
@@ -12,18 +12,7 @@ export function nudgeDatabaseOnline() {
   }
 }
 
-/** Cycle offline/online — helps Chrome recover a stuck socket session. */
-export function reconnectDatabase() {
-  if (!db) return;
-  try {
-    goOffline(db);
-    goOnline(db);
-  } catch (err) {
-    console.warn("[Hit4Hit sync] reconnectDatabase failed", err);
-  }
-}
-
-async function probeSdkRead(timeoutMs = 6000) {
+async function probeSdkRead(timeoutMs = 8000) {
   if (!db) return false;
   try {
     await Promise.race([
@@ -38,9 +27,9 @@ async function probeSdkRead(timeoutMs = 6000) {
   }
 }
 
-async function probeRestRead(timeoutMs = 8000) {
+async function probeRestRead(timeoutMs = 10_000) {
   try {
-    await restGet(".info/serverTimeOffset", timeoutMs);
+    await restProbeRead(timeoutMs);
     return true;
   } catch {
     return false;
@@ -67,18 +56,27 @@ export function waitForDatabaseOnline(timeoutMs = 15_000, options = {}) {
     const connectedRef = ref(db, ".info/connected");
     let settled = false;
     let unsub = () => {};
+    let sdkProbeTimer = null;
 
     const finish = (err, mode) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (sdkProbeTimer) clearTimeout(sdkProbeTimer);
       unsub();
       if (err) reject(err);
       else resolve({ mode });
     };
 
+    sdkProbeTimer = setTimeout(async () => {
+      if (settled) return;
+      if (await probeSdkRead(Math.min(8000, timeoutMs))) {
+        finish(null, "sdk-read");
+      }
+    }, 2500);
+
     const timer = setTimeout(async () => {
-      unsub();
+      if (settled) return;
 
       if (await probeSdkRead(Math.min(6000, timeoutMs))) {
         finish(null, "sdk-read");
@@ -108,4 +106,8 @@ export function waitForDatabaseOnline(timeoutMs = 15_000, options = {}) {
 /** Diagnostics helper — is HTTPS REST reachable when the live socket is not? */
 export async function probeDatabaseRest(timeoutMs = 10_000) {
   return probeRestRead(timeoutMs);
+}
+
+export async function probeDatabaseHost(timeoutMs = 6000) {
+  return restPingHost(timeoutMs);
 }
