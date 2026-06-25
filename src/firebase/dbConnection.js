@@ -16,7 +16,7 @@ async function probeSdkRead(timeoutMs = 8000) {
   if (!db) return false;
   try {
     await Promise.race([
-      get(ref(db, ".info/serverTimeOffset")),
+      get(ref(db, "games")),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("SDK_READ_PROBE_TIMEOUT")), timeoutMs)
       ),

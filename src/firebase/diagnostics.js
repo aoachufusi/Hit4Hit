@@ -148,18 +148,14 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
     }
   } else {
     try {
-      await withTimeout(
-        get(ref(db, ".info/serverTimeOffset")),
-        8_000,
-        "READ_INFO"
-      );
+      await withTimeout(get(ref(db, "games")), 8_000, "READ_GAMES");
       push("database-read", "Database read", true, "Server reachable");
-    } catch (err) {
+    } catch (sdkErr) {
       try {
         await restGet("games", 8_000);
         push("database-read", "Database read", true, "Server reachable (REST)");
-      } catch {
-        push("database-read", "Database read", false, formatErr(err));
+      } catch (restErr) {
+        push("database-read", "Database read", false, formatErr(restErr || sdkErr));
       }
     }
   }
