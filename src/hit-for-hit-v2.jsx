@@ -73,9 +73,11 @@ import {
   unlockPreviewAudio,
   prepareAppleMusicQueue,
   playAppleMusicFromUserGesture,
-  primePreviewFromUserGesture,
   clearPreparedAppleQueue,
   isMobileLikeDevice,
+  preparePreviewAudio,
+  playPreparedPreviewFromUserGesture,
+  clearPreparedPreview,
 } from "./musickit/musickitService.js";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
@@ -1170,6 +1172,7 @@ export default function HitForHit() {
   searchSpotifyTracksRef.current = searchSpotifyTracks;
   const [hostAwaitingTap, setHostAwaitingTap] = useState(false);
   const [appleQueueReady, setAppleQueueReady] = useState(false);
+  const [playbackReady, setPlaybackReady] = useState(false);
 
   const roundPauseSpotify = useCallback(async () => {
     if (usesAppleMusic || !spotify.loggedIn || !spotify.deviceId) return;
@@ -1180,27 +1183,31 @@ export default function HitForHit() {
     if (!gs?.code || !isHost || gs.phase !== PHASES.LISTENING) return;
     const index = gs.playbackIndex ?? 0;
     if (index >= 2) return;
-    if (usesAppleMusic && appleMusicConnected && !appleQueueReady) {
+    if (usesAppleMusic && appleMusicConnected && !playbackReady) {
       showToast("Still loading track — wait a moment", 2500);
       return;
     }
 
-    // Unlock audio + start Apple Music in the same turn as the tap (required on iOS).
+    const isMobile = isMobileLikeDevice();
+    const resolvedNow = hostPlaybackResolvedRef.current;
+
+    // Unlock audio in the same turn as the tap (required on iOS).
     unlockPreviewAudio();
+
+    const primedPreview =
+      resolvedNow?.preview
+        ? playPreparedPreviewFromUserGesture(resolvedNow.preview)
+        : null;
+
     const gestureMusic =
-      usesAppleMusic && appleMusicConnected
+      usesAppleMusic && appleMusicConnected && !primedPreview
         ? playAppleMusicFromUserGesture()
         : null;
-    const appleNeedsGesture =
-      usesAppleMusic && appleMusicConnected && isMobileLikeDevice();
+
+    const mobilePreferPreview = isMobile && Boolean(primedPreview);
     const preferFullTrack = usesAppleMusic
-      ? appleMusicConnected && (!appleNeedsGesture || Boolean(gestureMusic))
+      ? appleMusicConnected && !mobilePreferPreview
       : Boolean(spotify.loggedIn && spotify.deviceId);
-    const resolvedNow = hostPlaybackResolvedRef.current;
-    const primedPreview =
-      appleNeedsGesture && !gestureMusic && resolvedNow?.preview
-        ? primePreviewFromUserGesture(resolvedNow.preview)
-        : null;
 
     const epoch = ++playbackEpochRef.current;
     const pauseSpotify = usesAppleMusic ? undefined : roundPauseSpotify;
@@ -1245,6 +1252,7 @@ export default function HitForHit() {
           activeProvider: activeMusicProvider,
           appleGestureMusic: gestureMusic,
           primedPreviewAudio: primedPreview,
+          mobilePreferPreview,
         });
         if (playbackEpochRef.current !== epoch) return;
 
@@ -1294,8 +1302,8 @@ export default function HitForHit() {
         setHostAwaitingTap(false);
         if (result.type === "preview") {
           showToast(
-            appleNeedsGesture && appleMusicConnected
-              ? "Playing 30s preview — full track needs a tap on this device"
+            mobilePreferPreview
+              ? "Playing 30s preview"
               : "Playing 30s preview — full track unavailable on this device",
             4000
           );
@@ -1325,6 +1333,8 @@ export default function HitForHit() {
     isHost,
     usesAppleMusic,
     appleMusicConnected,
+    appleQueueReady,
+    playbackReady,
     activeMusicProvider,
     roundPauseSpotify,
     advancePlayback,
@@ -1336,7 +1346,9 @@ export default function HitForHit() {
       listeningPrepIndexRef.current = -1;
       setHostAwaitingTap(false);
       setAppleQueueReady(false);
+      setPlaybackReady(false);
       clearPreparedAppleQueue();
+      clearPreparedPreview();
       hostPlaybackResolvedRef.current = null;
       playbackCleanupRef.current?.();
       playbackCleanupRef.current = () => {};
@@ -1355,8 +1367,10 @@ export default function HitForHit() {
     let cancelled = false;
     setHostAwaitingTap(true);
     setAppleQueueReady(false);
+    setPlaybackReady(false);
     hostPlaybackResolvedRef.current = null;
     clearPreparedAppleQueue();
+    clearPreparedPreview();
     playbackCleanupRef.current?.();
     playbackCleanupRef.current = () => {};
 
@@ -1371,12 +1385,27 @@ export default function HitForHit() {
       if (cancelled) return;
       hostPlaybackResolvedRef.current = resolved;
 
-      if (usesAppleMusic && appleMusicConnected && resolved?.uri) {
-        const queued = await prepareAppleMusicQueue(resolved.uri);
-        if (!cancelled) setAppleQueueReady(queued);
-      } else {
-        setAppleQueueReady(true);
+      let previewPrepared = false;
+      if (resolved?.preview) {
+        previewPrepared = await preparePreviewAudio(resolved.preview);
       }
+
+      let applePrepared = !usesAppleMusic || !appleMusicConnected || !resolved?.uri;
+      if (usesAppleMusic && appleMusicConnected && resolved?.uri) {
+        applePrepared = await prepareAppleMusicQueue(resolved.uri);
+      }
+
+      if (cancelled) return;
+
+      const isMobile = isMobileLikeDevice();
+      const ready =
+        (isMobile && (previewPrepared || applePrepared)) ||
+        (previewPrepared && applePrepared) ||
+        (!resolved?.preview && applePrepared) ||
+        (!usesAppleMusic && Boolean(resolved?.preview || resolved?.uri));
+
+      setAppleQueueReady(applePrepared);
+      setPlaybackReady(ready);
     })();
 
     return () => {
@@ -2299,13 +2328,11 @@ export default function HitForHit() {
                   <button
                     type="button"
                     className="btn"
-                    disabled={
-                      usesAppleMusic && appleMusicConnected && !appleQueueReady
-                    }
+                    disabled={usesAppleMusic && appleMusicConnected && !playbackReady}
                     style={{
                       width: "100%",
                       background:
-                        usesAppleMusic && appleMusicConnected && !appleQueueReady
+                        usesAppleMusic && appleMusicConnected && !playbackReady
                           ? "#3d3550"
                           : C,
                       color: "#0D0A14",
@@ -2313,13 +2340,13 @@ export default function HitForHit() {
                       marginBottom: 12,
                       letterSpacing: ".06em",
                       opacity:
-                        usesAppleMusic && appleMusicConnected && !appleQueueReady
+                        usesAppleMusic && appleMusicConnected && !playbackReady
                           ? 0.7
                           : 1,
                     }}
                     onClick={() => startHostPlayback()}
                   >
-                    {usesAppleMusic && appleMusicConnected && !appleQueueReady
+                    {usesAppleMusic && appleMusicConnected && !playbackReady
                       ? "Loading track…"
                       : "▶ TAP TO PLAY"}
                   </button>

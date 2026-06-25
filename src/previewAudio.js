@@ -2,11 +2,60 @@
 
 let audioRef = null;
 let currentSongIdRef = null;
+let preparedPreviewUrl = null;
 let audioContextRef = null;
 let limitTimerRef = null;
 
 const BUFFER_MS = 80;
 const DEFAULT_LIMIT_SEC = 30;
+
+function applyMobileAudioAttrs(audio) {
+  audio.preload = "auto";
+  audio.volume = 0.85;
+  audio.setAttribute("playsinline", "true");
+  audio.setAttribute("webkit-playsinline", "true");
+  try {
+    audio.playsInline = true;
+  } catch {
+    /* ignore */
+  }
+}
+
+function attachPreviewLimitTimer(audio, songId, limitSec = DEFAULT_LIMIT_SEC) {
+  if (limitTimerRef) {
+    clearTimeout(limitTimerRef);
+    limitTimerRef = null;
+  }
+
+  const limitMs = Math.max(5, limitSec) * 1000;
+  limitTimerRef = setTimeout(() => {
+    if (currentSongIdRef !== songId) return;
+    const el = audioRef;
+    if (el) {
+      try {
+        el.dispatchEvent(new Event("ended"));
+      } catch {
+        /* ignore */
+      }
+    }
+    void stopPreviewAudio();
+  }, limitMs);
+
+  audio.addEventListener(
+    "ended",
+    () => {
+      if (currentSongIdRef === songId) {
+        if (limitTimerRef) {
+          clearTimeout(limitTimerRef);
+          limitTimerRef = null;
+        }
+        currentSongIdRef = null;
+        audioRef = null;
+      }
+    },
+    { once: true }
+  );
+}
 
 /** Call synchronously from a click/tap — unlocks Safari audio for later preview playback. */
 export function unlockPreviewAudio() {
@@ -36,44 +85,18 @@ export function unlockPreviewAudio() {
   }
 }
 
-/** Start preview playback synchronously inside a tap/click handler (iOS). */
-export function primePreviewFromUserGesture(previewUrl) {
+/** Load preview during LISTENING so play() can run synchronously on tap (iOS). */
+export async function preparePreviewAudio(previewUrl) {
   const url = String(previewUrl || "").trim();
-  if (!url || typeof window === "undefined") return null;
-
-  unlockPreviewAudio();
-
-  try {
-    if (audioRef) {
-      try {
-        audioRef.pause();
-      } catch {
-        /* ignore */
-      }
-    }
-
-    const audio = new Audio();
-    audio.preload = "auto";
-    audio.volume = 0.75;
-    audio.setAttribute("playsinline", "true");
-    audio.setAttribute("webkit-playsinline", "true");
-    try {
-      audio.playsInline = true;
-    } catch {
-      /* ignore */
-    }
-    audio.src = url;
-    currentSongIdRef = url;
-    audioRef = audio;
-    audio.play();
-    return audio;
-  } catch (e) {
-    console.warn("Preview gesture play failed", e);
-    return null;
+  if (!url || typeof window === "undefined") {
+    preparedPreviewUrl = null;
+    return false;
   }
-}
 
-export async function stopPreviewAudio({ keepAudioContext = false } = {}) {
+  if (preparedPreviewUrl === url && audioRef && audioRef.readyState >= 3) {
+    return true;
+  }
+
   if (limitTimerRef) {
     clearTimeout(limitTimerRef);
     limitTimerRef = null;
@@ -82,12 +105,99 @@ export async function stopPreviewAudio({ keepAudioContext = false } = {}) {
   if (audioRef) {
     try {
       audioRef.pause();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const audio = new Audio();
+  applyMobileAudioAttrs(audio);
+  audio.src = url;
+  preparedPreviewUrl = url;
+  currentSongIdRef = url;
+  audioRef = audio;
+
+  await new Promise((resolve) => {
+    const done = () => resolve();
+    audio.addEventListener("canplaythrough", done, { once: true });
+    audio.addEventListener("error", done, { once: true });
+    setTimeout(done, 6000);
+    audio.load();
+  });
+
+  if (preparedPreviewUrl !== url || audioRef !== audio) {
+    return false;
+  }
+
+  return audio.readyState >= 2 && !audio.error;
+}
+
+export function isPreviewPrepared(previewUrl) {
+  const url = String(previewUrl || "").trim();
+  return (
+    Boolean(url) &&
+    preparedPreviewUrl === url &&
+    Boolean(audioRef) &&
+    audioRef.readyState >= 2 &&
+    !audioRef.error
+  );
+}
+
+/** Start a pre-loaded preview synchronously inside a tap/click handler (iOS). */
+export function playPreparedPreviewFromUserGesture(previewUrl, limitSec = DEFAULT_LIMIT_SEC) {
+  const url = String(previewUrl || "").trim();
+  if (!url || typeof window === "undefined") return null;
+
+  unlockPreviewAudio();
+
+  if (!isPreviewPrepared(url)) {
+    console.warn("Preview not prepared for gesture play", url);
+    return null;
+  }
+
+  try {
+    applyMobileAudioAttrs(audioRef);
+    if (audioRef.currentTime > 0.05) {
+      audioRef.currentTime = 0;
+    }
+    currentSongIdRef = url;
+    audioRef.play();
+    attachPreviewLimitTimer(audioRef, url, limitSec);
+    return audioRef;
+  } catch (e) {
+    console.warn("Prepared preview gesture play failed", e);
+    return null;
+  }
+}
+
+/** @deprecated Prefer preparePreviewAudio + playPreparedPreviewFromUserGesture on mobile. */
+export function primePreviewFromUserGesture(previewUrl) {
+  return playPreparedPreviewFromUserGesture(previewUrl);
+}
+
+export function clearPreparedPreview() {
+  preparedPreviewUrl = null;
+}
+
+export async function stopPreviewAudio({
+  keepAudioContext = false,
+  keepPlaying = false,
+} = {}) {
+  if (limitTimerRef) {
+    clearTimeout(limitTimerRef);
+    limitTimerRef = null;
+  }
+
+  if (audioRef && !keepPlaying) {
+    try {
+      audioRef.pause();
       audioRef.src = "";
       audioRef.load();
     } catch {
       /* ignore */
     }
     audioRef = null;
+    preparedPreviewUrl = null;
   }
 
   if (!keepAudioContext && audioContextRef) {
@@ -99,7 +209,9 @@ export async function stopPreviewAudio({ keepAudioContext = false } = {}) {
     audioContextRef = null;
   }
 
-  currentSongIdRef = null;
+  if (!keepPlaying) {
+    currentSongIdRef = null;
+  }
 }
 
 /**
@@ -116,75 +228,27 @@ export async function playPreviewAudio(previewUrl, options = {}) {
   const songId = options.songId ?? url;
   const limitSec = options.limitSec ?? DEFAULT_LIMIT_SEC;
 
-  if (currentSongIdRef === songId && audioRef) {
+  if (currentSongIdRef === songId && audioRef && !audioRef.paused) {
     return audioRef;
   }
 
-  await stopPreviewAudio();
-  await new Promise((r) => setTimeout(r, BUFFER_MS));
-
-  currentSongIdRef = songId;
-
-  const audio = new Audio();
-  audio.preload = "auto";
-  audio.volume = 0.75;
-  audio.setAttribute("playsinline", "true");
-  audio.setAttribute("webkit-playsinline", "true");
-  try {
-    audio.playsInline = true;
-  } catch {
-    /* ignore */
+  const prepared = await preparePreviewAudio(url);
+  if (!prepared || !audioRef) {
+    throw new Error("Preview failed to load");
   }
-  audio.src = url;
-
-  await new Promise((resolve) => {
-    audio.addEventListener("canplaythrough", resolve, { once: true });
-    audio.addEventListener("error", resolve, { once: true });
-    setTimeout(resolve, 4000);
-    audio.load();
-  });
 
   if (currentSongIdRef !== songId) {
     throw new Error("Preview superseded while buffering");
   }
 
   try {
-    await audio.play();
-    audioRef = audio;
-
-    const limitMs = Math.max(5, limitSec) * 1000;
-    limitTimerRef = setTimeout(() => {
-      if (currentSongIdRef !== songId) return;
-      const el = audioRef;
-      if (el) {
-        try {
-          el.dispatchEvent(new Event("ended"));
-        } catch {
-          /* ignore */
-        }
-      }
-      stopPreviewAudio();
-    }, limitMs);
-
-    audio.addEventListener(
-      "ended",
-      () => {
-        if (currentSongIdRef === songId) {
-          if (limitTimerRef) {
-            clearTimeout(limitTimerRef);
-            limitTimerRef = null;
-          }
-          currentSongIdRef = null;
-          audioRef = null;
-        }
-      },
-      { once: true }
-    );
-
-    return audio;
+    await audioRef.play();
+    attachPreviewLimitTimer(audioRef, songId, limitSec);
+    return audioRef;
   } catch (e) {
     currentSongIdRef = null;
     audioRef = null;
+    preparedPreviewUrl = null;
     if (e?.name === "NotAllowedError") {
       const err = new Error("Autoplay blocked — tap the page to enable audio");
       err.name = "NotAllowedError";

@@ -317,6 +317,10 @@ export {
   stopPreviewAudio,
   stopPreview,
   unlockPreviewAudio,
+  preparePreviewAudio,
+  playPreparedPreviewFromUserGesture,
+  isPreviewPrepared,
+  clearPreparedPreview,
   primePreviewFromUserGesture,
 } from "../previewAudio.js";
 
@@ -435,6 +439,29 @@ export function clearPreparedAppleQueue() {
   preparedQueueSongId = null;
 }
 
+function domAudioIsAudible() {
+  if (typeof document === "undefined") return false;
+  return [...document.querySelectorAll("audio")].some(
+    (el) => !el.paused && el.currentTime > 0.05 && el.volume > 0 && !el.muted
+  );
+}
+
+async function verifyAppleMusicAudible(music, timeoutMs = 2500) {
+  const startDom = domAudioIsAudible();
+  const startTime = music?.currentPlaybackTime ?? 0;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (domAudioIsAudible() && !startDom) return true;
+    if (domAudioIsAudible() && startDom) return true;
+    const now = music?.currentPlaybackTime ?? 0;
+    if (now > startTime + 0.35 && domAudioIsAudible()) return true;
+    await new Promise((r) => setTimeout(r, 120));
+  }
+
+  return domAudioIsAudible();
+}
+
 /** Full Apple Music playback (host must be authorized). */
 export async function playAppleMusicTrack(catalogSongId, { gestureMusic = null } = {}) {
   const songId = String(catalogSongId || "").trim();
@@ -456,6 +483,10 @@ export async function playAppleMusicTrack(catalogSongId, { gestureMusic = null }
       );
     }
     patchMusicKitAudioForMobile();
+    const audible = await verifyAppleMusicAudible(gestureMusic);
+    if (!audible && isMobileLikeDevice()) {
+      throw new Error("Apple Music playing silently — using preview instead");
+    }
     return gestureMusic;
   }
 

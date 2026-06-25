@@ -7,11 +7,6 @@ import {
   stopAppleMusicPlayback,
   resetAppleMusicPlayback,
   unlockPreviewAudio,
-  primePreviewFromUserGesture,
-  prepareAppleMusicQueue,
-  playAppleMusicFromUserGesture,
-  clearPreparedAppleQueue,
-  isMobileLikeDevice,
 } from "./musickit/musickitService.js";
 
 export function extractSongTitle(label) {
@@ -54,12 +49,13 @@ export async function resolveTrackForPlayback(meta, label, artist, deps) {
 }
 
 async function tryPlayPreview(trackMeta, limitSec = 30, primedAudio = null) {
-  if (!trackMeta?.preview) return null;
+  if (!trackMeta?.preview && !primedAudio) return null;
   try {
-    if (primedAudio && !primedAudio.paused) {
+    if (primedAudio) {
       playRoundTrack.activeAudio = primedAudio;
       return { type: "preview", audio: primedAudio };
     }
+    if (!trackMeta?.preview) return null;
     unlockPreviewAudio();
     const audio = await playPreview(trackMeta.preview, {
       songId: trackMeta.id ?? trackMeta.uri ?? trackMeta.preview,
@@ -121,14 +117,18 @@ export async function playRoundTrack(
     activeProvider,
     appleGestureMusic = null,
     primedPreviewAudio = null,
+    mobilePreferPreview = false,
   } = {}
 ) {
-  // Stop previews / Spotify only — do not music.stop() before Apple setQueue (PLAY_ACTIVITY)
-  // Keep the iOS audio session alive when MusicKit already started from the tap handler.
-  await stopPreview(null, {
-    keepAudioContext: Boolean(appleGestureMusic || primedPreviewAudio),
-  });
-  playRoundTrack.activeAudio = null;
+  const keepPlaying = Boolean(appleGestureMusic || primedPreviewAudio);
+  if (keepPlaying) {
+    await stopPreview(null, { keepAudioContext: true, keepPlaying: true });
+  } else {
+    await stopPreview();
+  }
+  if (!keepPlaying) {
+    playRoundTrack.activeAudio = null;
+  }
   if (pauseSpotify) {
     try {
       await pauseSpotify();
@@ -140,6 +140,17 @@ export async function playRoundTrack(
   const meta = trackMeta
     ? { ...trackMeta, provider: trackMeta.provider ?? activeProvider }
     : null;
+
+  if (mobilePreferPreview && primedPreviewAudio) {
+    if (appleGestureMusic) {
+      try {
+        appleGestureMusic.stop?.();
+      } catch {
+        /* ignore */
+      }
+    }
+    return await tryPlayPreview(meta, previewLimitSec, primedPreviewAudio);
+  }
 
   const tryFull = async () => {
     try {
