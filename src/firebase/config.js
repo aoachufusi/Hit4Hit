@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics, isSupported } from "firebase/analytics";
-import { getDatabase } from "firebase/database";
+import { getDatabase, forceLongPolling } from "firebase/database";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -27,6 +27,15 @@ if (!isFirebaseConfigured) {
 }
 
 const app = isFirebaseConfigured ? initializeApp(firebaseConfig) : null;
+
+if (app && typeof window !== "undefined") {
+  try {
+    forceLongPolling();
+  } catch (e) {
+    console.warn("forceLongPolling failed", e);
+  }
+}
+
 const db = app ? getDatabase(app) : null;
 
 /** Analytics only when supported (avoids crashing dev / blocked trackers). */

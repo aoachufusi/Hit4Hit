@@ -39,6 +39,7 @@ import {
   ensureAuthWithRetry,
   clearAuthSession,
   formatFirebaseConnectError,
+  isLikelyChrome,
 } from "./firebase/auth.js";
 import { useSpotify } from "./useSpotify.js";
 import SongSearch from "./musickit/SongSearch.jsx";
@@ -1596,7 +1597,9 @@ export default function HitForHit() {
             {syncStuck && (
               <div style={{marginTop:4}}>
                 <div className="bf" style={{color:MUTED2,fontSize:12,lineHeight:1.5,marginBottom:14}}>
-                  Connection stuck — usually a browser extension or cached Firebase session on this device.
+                  {isLikelyChrome()
+                    ? "Chrome is blocking Firebase on this device (Safari works). Usually a Chrome extension or corrupted site storage."
+                    : "Connection stuck — try another browser or clear site data for this site."}
                 </div>
                 <button
                   className="btn"
@@ -1605,9 +1608,13 @@ export default function HitForHit() {
                 >
                   Retry connection
                 </button>
-                <div className="bf" style={{color:MUTED3,fontSize:11,lineHeight:1.45}}>
-                  Or open in incognito, disable ad blockers for this site, or clear site data for {typeof window !== "undefined" ? window.location.hostname : "this site"}.
-                </div>
+                {isLikelyChrome() && (
+                  <div className="bf" style={{color:MUTED3,fontSize:11,lineHeight:1.55,textAlign:"left"}}>
+                    <div style={{marginBottom:6}}>In Chrome: lock icon → Site settings → Clear data</div>
+                    <div style={{marginBottom:6}}>Or chrome://extensions — disable ad blockers for hit4hit.app</div>
+                    <div>Check &quot;Allow in incognito&quot; isn&apos;t enabled on extensions you use in private mode</div>
+                  </div>
+                )}
               </div>
             )}
           </div>
