@@ -160,7 +160,10 @@ export function formatFirebaseConnectError(err) {
   const msg = String(err?.message || err || "");
 
   if (msg.includes("GET_GAME_TIMEOUT") || msg.includes("DB_CONNECTED_TIMEOUT")) {
-    return "Database connection timed out — try again or use the connection test on the home screen";
+    if (isLikelyChrome()) {
+      return "Database connection timed out — disable Chrome extensions for this site, clear site data, or try Safari";
+    }
+    return "Database connection timed out — check your network and try the connection test";
   }
   if (msg.includes("TIMEOUT") || code === "auth/network-request-failed") {
     if (isLikelyChrome()) {

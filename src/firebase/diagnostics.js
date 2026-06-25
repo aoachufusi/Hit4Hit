@@ -2,7 +2,14 @@ import { ref, get } from "firebase/database";
 import { ensureAuthWithRetry } from "./auth.js";
 import { db, isFirebaseConfigured } from "./config.js";
 import { withTimeout } from "./promiseUtils.js";
-import { waitForDatabaseOnline } from "./dbConnection.js";
+import {
+  waitForDatabaseOnline,
+  nudgeDatabaseOnline,
+  reconnectDatabase,
+  probeDatabaseRest,
+} from "./dbConnection.js";
+import { restGet } from "./restFallback.js";
+import { isLikelyChrome } from "./browserUtils.js";
 
 function formatErr(err) {
   const code = err?.code || "";
@@ -52,11 +59,27 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
   }
 
   try {
-    await waitForDatabaseOnline(12_000);
-    push("database", "Realtime Database", true, "Connected");
+    reconnectDatabase();
+    nudgeDatabaseOnline();
+    const conn = await waitForDatabaseOnline(18_000, { allowRestFallback: false });
+    const modeLabel =
+      conn.mode === "socket"
+        ? "Connected (live socket)"
+        : conn.mode === "sdk-read"
+          ? "Connected (SDK read)"
+          : "Connected";
+    push("database", "Realtime Database", true, modeLabel);
   } catch (err) {
-    push("database", "Realtime Database", false, formatErr(err));
-    return { ok: false, steps, at: Date.now() };
+    const restOk = await probeDatabaseRest(10_000);
+    if (restOk) {
+      const hint = isLikelyChrome()
+        ? "Live socket blocked — disable ad blockers/extensions for this site, or try Safari. HTTPS reads OK."
+        : "Live socket blocked — check network/VPN. HTTPS reads OK.";
+      push("database", "Realtime Database", false, hint);
+    } else {
+      push("database", "Realtime Database", false, formatErr(err));
+      return { ok: false, steps, at: Date.now() };
+    }
   }
 
   const code = String(gameCode || "").trim().toUpperCase();
@@ -74,7 +97,17 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
         snap.exists() ? "Found" : "Not found — check the code"
       );
     } catch (err) {
-      push("game", `Game ${code}`, false, formatErr(err));
+      try {
+        const data = await restGet(`games/${code}`, 12_000);
+        push(
+          "game",
+          `Game ${code}`,
+          true,
+          data ? "Found (REST)" : "Not found — check the code"
+        );
+      } catch {
+        push("game", `Game ${code}`, false, formatErr(err));
+      }
     }
   } else {
     try {
@@ -85,7 +118,12 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
       );
       push("database-read", "Database read", true, "Server reachable");
     } catch (err) {
-      push("database-read", "Database read", false, formatErr(err));
+      try {
+        await restGet(".info/serverTimeOffset", 8_000);
+        push("database-read", "Database read", true, "Server reachable (REST)");
+      } catch {
+        push("database-read", "Database read", false, formatErr(err));
+      }
     }
   }
 

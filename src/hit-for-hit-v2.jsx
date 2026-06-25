@@ -43,6 +43,7 @@ import {
   isLikelyChrome,
 } from "./firebase/auth.js";
 import { runFirebaseDiagnostics } from "./firebase/diagnostics.js";
+import { reconnectDatabase } from "./firebase/dbConnection.js";
 import SyncDiagnosticsPanel from "./firebase/SyncDiagnosticsPanel.jsx";
 import { useSpotify } from "./useSpotify.js";
 import SongSearch from "./musickit/SongSearch.jsx";
@@ -421,6 +422,7 @@ export default function HitForHit() {
     try {
       await hardResetAuthSession();
       resetDbReady();
+      reconnectDatabase();
       await ensureAuthWithRetry();
       const raw = await getGame(code);
       if (raw) applyGameSnapshot(raw);
@@ -1167,12 +1169,12 @@ export default function HitForHit() {
   const playbackEpochRef = useRef(0);
   const hostPlaybackResolvedRef = useRef(null);
   const playbackCleanupRef = useRef(() => {});
-  const listeningPrepIndexRef = useRef(-1);
+  const listeningPrepKeyRef = useRef(null);
   const searchSpotifyTracksRef = useRef(searchSpotifyTracks);
   searchSpotifyTracksRef.current = searchSpotifyTracks;
   const [hostAwaitingTap, setHostAwaitingTap] = useState(false);
   const [appleQueueReady, setAppleQueueReady] = useState(false);
-  const [playbackReady, setPlaybackReady] = useState(false);
+  const [playbackPreparing, setPlaybackPreparing] = useState(false);
 
   const roundPauseSpotify = useCallback(async () => {
     if (usesAppleMusic || !spotify.loggedIn || !spotify.deviceId) return;
@@ -1183,7 +1185,7 @@ export default function HitForHit() {
     if (!gs?.code || !isHost || gs.phase !== PHASES.LISTENING) return;
     const index = gs.playbackIndex ?? 0;
     if (index >= 2) return;
-    if (usesAppleMusic && appleMusicConnected && !playbackReady) {
+    if (playbackPreparing) {
       showToast("Still loading track — wait a moment", 2500);
       return;
     }
@@ -1333,8 +1335,7 @@ export default function HitForHit() {
     isHost,
     usesAppleMusic,
     appleMusicConnected,
-    appleQueueReady,
-    playbackReady,
+    playbackPreparing,
     activeMusicProvider,
     roundPauseSpotify,
     advancePlayback,
@@ -1343,10 +1344,10 @@ export default function HitForHit() {
 
   useEffect(() => {
     if (gs?.phase !== PHASES.LISTENING) {
-      listeningPrepIndexRef.current = -1;
+      listeningPrepKeyRef.current = null;
       setHostAwaitingTap(false);
       setAppleQueueReady(false);
-      setPlaybackReady(false);
+      setPlaybackPreparing(false);
       clearPreparedAppleQueue();
       clearPreparedPreview();
       hostPlaybackResolvedRef.current = null;
@@ -1361,13 +1362,14 @@ export default function HitForHit() {
     const index = gs.playbackIndex ?? 0;
     if (!isHost || index >= 2) return;
 
-    if (listeningPrepIndexRef.current === index) return;
-    listeningPrepIndexRef.current = index;
+    const prepKey = `${index}:${appleMusicConnected ? "1" : "0"}`;
+    if (listeningPrepKeyRef.current === prepKey) return;
+    listeningPrepKeyRef.current = prepKey;
 
     let cancelled = false;
     setHostAwaitingTap(true);
     setAppleQueueReady(false);
-    setPlaybackReady(false);
+    setPlaybackPreparing(true);
     hostPlaybackResolvedRef.current = null;
     clearPreparedAppleQueue();
     clearPreparedPreview();
@@ -1375,50 +1377,55 @@ export default function HitForHit() {
     playbackCleanupRef.current = () => {};
 
     (async () => {
-      const meta = index === 0 ? gs.song1Meta : gs.song2Meta;
-      const label = index === 0 ? gs.song1 : gs.song2;
-      const artist = index === 0 ? gs.artist1 : gs.artist2;
-      const resolved = await resolveTrackForPlayback(meta, label, artist, {
-        usesAppleMusic,
-        searchSpotifyTracks: searchSpotifyTracksRef.current,
-      });
-      if (cancelled) return;
-      hostPlaybackResolvedRef.current = resolved;
+      try {
+        const meta = index === 0 ? gs.song1Meta : gs.song2Meta;
+        const label = index === 0 ? gs.song1 : gs.song2;
+        const artist = index === 0 ? gs.artist1 : gs.artist2;
+        const resolved = await resolveTrackForPlayback(meta, label, artist, {
+          usesAppleMusic,
+          searchSpotifyTracks: searchSpotifyTracksRef.current,
+        });
+        if (cancelled) return;
+        hostPlaybackResolvedRef.current = resolved;
 
-      let previewPrepared = false;
-      if (resolved?.preview) {
-        previewPrepared = await preparePreviewAudio(resolved.preview);
+        const previewPrepared = resolved?.preview
+          ? await preparePreviewAudio(resolved.preview)
+          : false;
+
+        let applePrepared =
+          !usesAppleMusic || !appleMusicConnected || !resolved?.uri;
+        if (usesAppleMusic && appleMusicConnected && resolved?.uri) {
+          applePrepared = await prepareAppleMusicQueue(resolved.uri);
+        }
+
+        if (cancelled) return;
+
+        setAppleQueueReady(applePrepared);
+      } catch (e) {
+        if (!cancelled) {
+          logClientError("Listening prep failed:", e);
+        }
+      } finally {
+        if (!cancelled) setPlaybackPreparing(false);
       }
-
-      let applePrepared = !usesAppleMusic || !appleMusicConnected || !resolved?.uri;
-      if (usesAppleMusic && appleMusicConnected && resolved?.uri) {
-        applePrepared = await prepareAppleMusicQueue(resolved.uri);
-      }
-
-      if (cancelled) return;
-
-      const isMobile = isMobileLikeDevice();
-      const ready =
-        (isMobile && (previewPrepared || applePrepared)) ||
-        (previewPrepared && applePrepared) ||
-        (!resolved?.preview && applePrepared) ||
-        (!usesAppleMusic && Boolean(resolved?.preview || resolved?.uri));
-
-      setAppleQueueReady(applePrepared);
-      setPlaybackReady(ready);
     })();
 
     return () => {
       cancelled = true;
+      listeningPrepKeyRef.current = null;
     };
   }, [
     gs?.phase,
     gs?.playbackIndex,
+    gs?.song1Meta,
+    gs?.song2Meta,
+    gs?.song1,
+    gs?.song2,
+    gs?.artist1,
+    gs?.artist2,
     isHost,
     usesAppleMusic,
     appleMusicConnected,
-    appleQueueReady,
-    showToast,
     roundPauseSpotify,
   ]);
 
@@ -2328,27 +2335,19 @@ export default function HitForHit() {
                   <button
                     type="button"
                     className="btn"
-                    disabled={usesAppleMusic && appleMusicConnected && !playbackReady}
+                    disabled={playbackPreparing}
                     style={{
                       width: "100%",
-                      background:
-                        usesAppleMusic && appleMusicConnected && !playbackReady
-                          ? "#3d3550"
-                          : C,
+                      background: playbackPreparing ? "#3d3550" : C,
                       color: "#0D0A14",
                       fontSize: 22,
                       marginBottom: 12,
                       letterSpacing: ".06em",
-                      opacity:
-                        usesAppleMusic && appleMusicConnected && !playbackReady
-                          ? 0.7
-                          : 1,
+                      opacity: playbackPreparing ? 0.7 : 1,
                     }}
                     onClick={() => startHostPlayback()}
                   >
-                    {usesAppleMusic && appleMusicConnected && !playbackReady
-                      ? "Loading track…"
-                      : "▶ TAP TO PLAY"}
+                    {playbackPreparing ? "Loading track…" : "▶ TAP TO PLAY"}
                   </button>
                 )}
 

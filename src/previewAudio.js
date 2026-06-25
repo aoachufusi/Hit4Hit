@@ -120,8 +120,10 @@ export async function preparePreviewAudio(previewUrl) {
   await new Promise((resolve) => {
     const done = () => resolve();
     audio.addEventListener("canplaythrough", done, { once: true });
+    audio.addEventListener("canplay", done, { once: true });
+    audio.addEventListener("loadeddata", done, { once: true });
     audio.addEventListener("error", done, { once: true });
-    setTimeout(done, 6000);
+    setTimeout(done, 8000);
     audio.load();
   });
 
@@ -129,7 +131,12 @@ export async function preparePreviewAudio(previewUrl) {
     return false;
   }
 
-  return audio.readyState >= 2 && !audio.error;
+  if (audio.error) {
+    console.warn("Preview load error", audio.error);
+    return false;
+  }
+
+  return audio.readyState >= 1;
 }
 
 export function isPreviewPrepared(previewUrl) {
@@ -138,7 +145,7 @@ export function isPreviewPrepared(previewUrl) {
     Boolean(url) &&
     preparedPreviewUrl === url &&
     Boolean(audioRef) &&
-    audioRef.readyState >= 2 &&
+    audioRef.readyState >= 1 &&
     !audioRef.error
   );
 }
