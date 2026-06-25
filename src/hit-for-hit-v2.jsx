@@ -37,6 +37,7 @@ import {
 import { isFirebaseConfigured } from "./firebase/config.js";
 import {
   ensureAuthWithRetry,
+  clearAuthSession,
   formatFirebaseConnectError,
 } from "./firebase/auth.js";
 import { useSpotify } from "./useSpotify.js";
@@ -243,6 +244,7 @@ export default function HitForHit() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [confettiItems, setConfettiItems] = useState(null);
   const [connStatus, setConnStatus] = useState("ok"); // "ok"|"error"|"syncing" (Firebase sync, not Spotify)
+  const [syncStuck, setSyncStuck] = useState(false);
   const [toast, setToast]       = useState(null);
 
   const showToast = useCallback((msg, dur = 2500) => {
@@ -267,37 +269,65 @@ export default function HitForHit() {
   const [songSubmitted, setSongSubmitted] = useState(false);
 
   const unsubRef = useRef(null);
+  const activeGameCodeRef = useRef(null);
+  const syncPollRef = useRef(null);
+  const syncWatchdogRef = useRef(null);
+
+  const stopSyncHelpers = useCallback(() => {
+    if (syncPollRef.current) {
+      clearInterval(syncPollRef.current);
+      syncPollRef.current = null;
+    }
+    if (syncWatchdogRef.current) {
+      clearTimeout(syncWatchdogRef.current);
+      syncWatchdogRef.current = null;
+    }
+  }, []);
+
+  const applyGameSnapshot = useCallback((fresh) => {
+    try {
+      setGs(normalizeGameState(fresh));
+      setConnStatus("ok");
+      setSyncStuck(false);
+      stopSyncHelpers();
+    } catch (e) {
+      console.error("Game state sync failed", e);
+      setConnStatus("error");
+    }
+  }, [stopSyncHelpers]);
 
   const startListening = useCallback((code) => {
+    activeGameCodeRef.current = code;
+    stopSyncHelpers();
     if (unsubRef.current) unsubRef.current();
     unsubRef.current = null;
+
+    setConnStatus("syncing");
+    setSyncStuck(false);
 
     const attach = async (retried = false) => {
       try {
         const unsub = await subscribeToGame(
           code,
           (fresh) => {
-            try {
-              setGs(normalizeGameState(fresh));
-              setConnStatus("ok");
-            } catch (e) {
-              console.error("Game state sync failed", e);
-              setConnStatus("error");
-            }
+            applyGameSnapshot(fresh);
           },
           async (err) => {
             console.error("subscribeToGame error", err);
             if (!retried) {
               try {
+                await clearAuthSession();
                 await ensureAuthWithRetry();
                 await attach(true);
               } catch (retryErr) {
                 console.error("subscribeToGame retry failed", retryErr);
                 setConnStatus("error");
+                setSyncStuck(true);
               }
               return;
             }
             setConnStatus("error");
+            setSyncStuck(true);
           }
         );
         unsubRef.current = unsub;
@@ -305,26 +335,66 @@ export default function HitForHit() {
         console.error("subscribeToGame failed", err);
         if (!retried) {
           try {
+            await clearAuthSession();
             await ensureAuthWithRetry();
             await attach(true);
           } catch (retryErr) {
             console.error("subscribeToGame retry failed", retryErr);
             setConnStatus("error");
+            setSyncStuck(true);
           }
           return;
         }
         setConnStatus("error");
+        setSyncStuck(true);
       }
     };
 
     attach();
-  }, []);
+
+    syncPollRef.current = setInterval(() => {
+      const gameCode = activeGameCodeRef.current;
+      if (!gameCode) return;
+      getGame(gameCode)
+        .then((raw) => {
+          if (raw) applyGameSnapshot(raw);
+        })
+        .catch((e) => {
+          logClientError("Sync poll failed:", e);
+        });
+    }, 2500);
+
+    syncWatchdogRef.current = setTimeout(() => {
+      setSyncStuck(true);
+      setConnStatus("error");
+    }, 18_000);
+  }, [applyGameSnapshot, stopSyncHelpers]);
+
+  const retryGameSync = useCallback(async () => {
+    const code = activeGameCodeRef.current;
+    if (!code) return;
+    setSyncStuck(false);
+    setConnStatus("syncing");
+    try {
+      await clearAuthSession();
+      await ensureAuthWithRetry();
+      const raw = await getGame(code);
+      if (raw) applyGameSnapshot(raw);
+      startListening(code);
+    } catch (e) {
+      logClientError("Retry game sync failed:", e);
+      showToast(formatFirebaseConnectError(e), 5000);
+      setConnStatus("error");
+      setSyncStuck(true);
+    }
+  }, [startListening, applyGameSnapshot, showToast]);
 
   useEffect(() => {
     return () => {
+      stopSyncHelpers();
       if (unsubRef.current) unsubRef.current();
     };
-  }, []);
+  }, [stopSyncHelpers]);
 
   useEffect(() => {
     ensureAuthWithRetry().then((user) => {
@@ -496,7 +566,6 @@ export default function HitForHit() {
     setHostPickP2("");
     setScreen("lobby");
     startListening(code);
-    setConnStatus("ok");
   };
 
   // ── JOIN GAME ────────────────────────────────────────────────────────────
@@ -521,6 +590,7 @@ export default function HitForHit() {
       logClientError("Join load failed:", e);
       setJoinError(formatFirebaseConnectError(e));
       setConnStatus("error");
+      setSyncStuck(true);
       return;
     }
     const found = normalizeGameState(raw);
@@ -590,6 +660,7 @@ export default function HitForHit() {
       logClientError("Join write failed:", e);
       setJoinError(formatFirebaseConnectError(e));
       setConnStatus("error");
+      setSyncStuck(true);
       return;
     }
 
@@ -597,7 +668,6 @@ export default function HitForHit() {
     setMyName(name);
     setScreen("lobby");
     startListening(code);
-    setConnStatus("ok");
   };
 
   // ── SET ARTISTS (in lobby) ───────────────────────────────────────────────
@@ -1520,7 +1590,26 @@ export default function HitForHit() {
 
         {(screen==="lobby" || screen==="game") && !gs && (
           <div className="card slide-up" style={{padding:"2rem",textAlign:"center"}}>
-            <div className="pulse bf" style={{color:MUTED1,fontSize:14}}>Syncing game…</div>
+            <div className="pulse bf" style={{color:MUTED1,fontSize:14,marginBottom: syncStuck ? 12 : 0}}>
+              Syncing game…
+            </div>
+            {syncStuck && (
+              <div style={{marginTop:4}}>
+                <div className="bf" style={{color:MUTED2,fontSize:12,lineHeight:1.5,marginBottom:14}}>
+                  Connection stuck — usually a browser extension or cached Firebase session on this device.
+                </div>
+                <button
+                  className="btn"
+                  style={{background:C,color:"#fff",marginBottom:10}}
+                  onClick={() => retryGameSync()}
+                >
+                  Retry connection
+                </button>
+                <div className="bf" style={{color:MUTED3,fontSize:11,lineHeight:1.45}}>
+                  Or open in incognito, disable ad blockers for this site, or clear site data for {typeof window !== "undefined" ? window.location.hostname : "this site"}.
+                </div>
+              </div>
+            )}
           </div>
         )}
 

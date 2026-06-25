@@ -1,20 +1,11 @@
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { app } from "./config.js";
+import { withTimeout } from "./promiseUtils.js";
 
 const auth = app ? getAuth(app) : null;
-
 const AUTH_TIMEOUT_MS = 15_000;
 
 let authInFlight = null;
-
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms);
-    }),
-  ]);
-}
 
 /** Clear cached Firebase auth (fixes stuck anonymous sessions in browser storage). */
 export async function clearAuthSession() {
