@@ -37,7 +37,7 @@ import {
 import { isFirebaseConfigured } from "./firebase/config.js";
 import {
   ensureAuthWithRetry,
-  clearAuthSession,
+  hardResetAuthSession,
   formatFirebaseConnectError,
   isLikelyChrome,
 } from "./firebase/auth.js";
@@ -316,7 +316,6 @@ export default function HitForHit() {
             console.error("subscribeToGame error", err);
             if (!retried) {
               try {
-                await clearAuthSession();
                 await ensureAuthWithRetry();
                 await attach(true);
               } catch (retryErr) {
@@ -335,7 +334,6 @@ export default function HitForHit() {
         console.error("subscribeToGame failed", err);
         if (!retried) {
           try {
-            await clearAuthSession();
             await ensureAuthWithRetry();
             await attach(true);
           } catch (retryErr) {
@@ -376,7 +374,7 @@ export default function HitForHit() {
     setSyncStuck(false);
     setConnStatus("syncing");
     try {
-      await clearAuthSession();
+      await hardResetAuthSession();
       await ensureAuthWithRetry();
       const raw = await getGame(code);
       if (raw) applyGameSnapshot(raw);
@@ -514,7 +512,7 @@ export default function HitForHit() {
       if (e?.message === "COLLISION_EXHAUSTED") {
         showToast("Could not generate a room code — try again.");
       } else {
-        showToast("Could not reach the game server — try again.");
+        showToast(formatFirebaseConnectError(e) || "Could not reach the game server — try again.");
       }
       return;
     }

@@ -7,20 +7,18 @@ import {
 } from "firebase/auth";
 import { app } from "./config.js";
 import { withTimeout } from "./promiseUtils.js";
+import { isLikelyChrome } from "./browserUtils.js";
 
 const auth = app ? getAuth(app) : null;
 const AUTH_TIMEOUT_MS = 15_000;
 
 let authInFlight = null;
 let useInMemoryPersistence = false;
+let persistenceConfigured = false;
 
-/** Chrome often blocks or corrupts IndexedDB auth storage while Safari works fine. */
-export function isLikelyChrome() {
-  if (typeof navigator === "undefined") return false;
-  return /Chrome\//.test(navigator.userAgent) && !/Edg\//.test(navigator.userAgent);
-}
+export { isLikelyChrome };
 
-/** Wipe Firebase IndexedDB + localStorage (fixes stuck Chrome sessions). */
+/** Wipe Firebase IndexedDB + localStorage (Chrome stuck sessions only — avoid on Safari). */
 export async function clearFirebaseBrowserStorage() {
   if (typeof indexedDB !== "undefined" && indexedDB.databases) {
     try {
@@ -52,10 +50,31 @@ export async function clearFirebaseBrowserStorage() {
   }
 }
 
-/** Clear cached Firebase auth (fixes stuck anonymous sessions in browser storage). */
+async function configurePersistence() {
+  if (!auth || persistenceConfigured) return;
+  const mode = useInMemoryPersistence
+    ? inMemoryPersistence
+    : browserLocalPersistence;
+  await setPersistence(auth, mode);
+  persistenceConfigured = true;
+}
+
+/** Sign out only — does not wipe browser storage (safe for Safari retries). */
 export async function clearAuthSession() {
   if (!auth) return;
   authInFlight = null;
+  try {
+    await auth.signOut();
+  } catch (err) {
+    console.warn("Firebase signOut failed", err);
+  }
+}
+
+/** Full reset for manual retry — wipes cached auth storage. */
+export async function hardResetAuthSession() {
+  if (!auth) return;
+  authInFlight = null;
+  persistenceConfigured = false;
   try {
     await auth.signOut();
   } catch (err) {
@@ -65,10 +84,7 @@ export async function clearAuthSession() {
 }
 
 async function signInFresh() {
-  const persistence = useInMemoryPersistence
-    ? inMemoryPersistence
-    : browserLocalPersistence;
-  await setPersistence(auth, persistence);
+  await configurePersistence();
   const result = await withTimeout(
     signInAnonymously(auth),
     AUTH_TIMEOUT_MS,
@@ -77,7 +93,7 @@ async function signInFresh() {
   return result.user;
 }
 
-export async function ensureAuth({ forceRefresh = false } = {}) {
+export async function ensureAuth({ forceRefresh = false, wipeStorage = false } = {}) {
   if (!auth) {
     throw new Error(
       "Firebase is not configured. Check VITE_FIREBASE_* in .env and restart the dev server."
@@ -85,7 +101,16 @@ export async function ensureAuth({ forceRefresh = false } = {}) {
   }
 
   if (forceRefresh) {
-    await clearAuthSession();
+    authInFlight = null;
+    persistenceConfigured = false;
+    try {
+      await auth.signOut();
+    } catch (err) {
+      console.warn("Firebase signOut failed", err);
+    }
+    if (wipeStorage) {
+      await clearFirebaseBrowserStorage();
+    }
   }
 
   if (auth.currentUser && !forceRefresh) {
@@ -95,6 +120,7 @@ export async function ensureAuth({ forceRefresh = false } = {}) {
     } catch (err) {
       console.warn("Stale Firebase session, signing in again", err);
       await clearAuthSession();
+      persistenceConfigured = false;
     }
   }
 
@@ -107,7 +133,7 @@ export async function ensureAuth({ forceRefresh = false } = {}) {
   return authInFlight;
 }
 
-/** Sign in with timeout; on failure, clear storage and retry with in-memory fallback. */
+/** Sign in with timeout; only wipes storage after repeated failures (Chrome). */
 export async function ensureAuthWithRetry() {
   try {
     return await ensureAuth();
@@ -116,10 +142,14 @@ export async function ensureAuthWithRetry() {
     try {
       return await ensureAuth({ forceRefresh: true });
     } catch (second) {
-      console.warn("Firebase auth failed, trying in-memory persistence", second);
+      if (!isLikelyChrome()) {
+        throw second;
+      }
+      console.warn("Firebase auth failed, hard reset (Chrome)", second);
       useInMemoryPersistence = true;
+      persistenceConfigured = false;
       authInFlight = null;
-      return ensureAuth({ forceRefresh: true });
+      return ensureAuth({ forceRefresh: true, wipeStorage: true });
     }
   }
 }
@@ -131,9 +161,9 @@ export function formatFirebaseConnectError(err) {
 
   if (msg.includes("TIMEOUT") || code === "auth/network-request-failed") {
     if (isLikelyChrome()) {
-      return "Chrome blocked Firebase — disable extensions for this site or clear site data (lock icon → Site settings → Clear data)";
+      return "Chrome blocked Firebase — disable extensions for this site or clear site data";
     }
-    return "Connection timed out — try another browser or network";
+    return "Connection timed out — check your network and try again";
   }
   if (code === "auth/unauthorized-domain") {
     return "This site isn't authorized in Firebase — add your domain under Authentication → Settings";
@@ -142,12 +172,12 @@ export function formatFirebaseConnectError(err) {
     return "Enable Anonymous sign-in in Firebase Authentication";
   }
   if (/permission_denied|Permission denied/i.test(msg)) {
-    return "Could not reach the game server — try again";
+    return "Game server rejected the connection — tap Retry or refresh the page";
   }
   if (isLikelyChrome()) {
-    return "Chrome couldn't connect — try Safari, or clear site data for this site in Chrome";
+    return "Chrome couldn't connect — try Safari, or clear site data for this site";
   }
-  return "Failed to connect — try again or use another browser";
+  return "Failed to connect — try again or refresh the page";
 }
 
 export function getCurrentUser() {
