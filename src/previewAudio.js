@@ -36,7 +36,44 @@ export function unlockPreviewAudio() {
   }
 }
 
-export async function stopPreviewAudio() {
+/** Start preview playback synchronously inside a tap/click handler (iOS). */
+export function primePreviewFromUserGesture(previewUrl) {
+  const url = String(previewUrl || "").trim();
+  if (!url || typeof window === "undefined") return null;
+
+  unlockPreviewAudio();
+
+  try {
+    if (audioRef) {
+      try {
+        audioRef.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const audio = new Audio();
+    audio.preload = "auto";
+    audio.volume = 0.75;
+    audio.setAttribute("playsinline", "true");
+    audio.setAttribute("webkit-playsinline", "true");
+    try {
+      audio.playsInline = true;
+    } catch {
+      /* ignore */
+    }
+    audio.src = url;
+    currentSongIdRef = url;
+    audioRef = audio;
+    audio.play();
+    return audio;
+  } catch (e) {
+    console.warn("Preview gesture play failed", e);
+    return null;
+  }
+}
+
+export async function stopPreviewAudio({ keepAudioContext = false } = {}) {
   if (limitTimerRef) {
     clearTimeout(limitTimerRef);
     limitTimerRef = null;
@@ -53,7 +90,7 @@ export async function stopPreviewAudio() {
     audioRef = null;
   }
 
-  if (audioContextRef) {
+  if (!keepAudioContext && audioContextRef) {
     try {
       await audioContextRef.close();
     } catch {
@@ -91,6 +128,13 @@ export async function playPreviewAudio(previewUrl, options = {}) {
   const audio = new Audio();
   audio.preload = "auto";
   audio.volume = 0.75;
+  audio.setAttribute("playsinline", "true");
+  audio.setAttribute("webkit-playsinline", "true");
+  try {
+    audio.playsInline = true;
+  } catch {
+    /* ignore */
+  }
   audio.src = url;
 
   await new Promise((resolve) => {
@@ -151,8 +195,8 @@ export async function playPreviewAudio(previewUrl, options = {}) {
 }
 
 /** @deprecated Pass no args — cleans up the singleton preview player. */
-export async function stopPreview(_legacyAudio) {
-  await stopPreviewAudio();
+export async function stopPreview(_legacyAudio, options) {
+  await stopPreviewAudio(options);
 }
 
 /** @deprecated Use playPreviewAudio — kept for existing imports. */

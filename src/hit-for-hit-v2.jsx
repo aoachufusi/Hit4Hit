@@ -71,6 +71,11 @@ import {
   getDeveloperToken,
   unauthorizeHost,
   unlockPreviewAudio,
+  prepareAppleMusicQueue,
+  playAppleMusicFromUserGesture,
+  primePreviewFromUserGesture,
+  clearPreparedAppleQueue,
+  isMobileLikeDevice,
 } from "./musickit/musickitService.js";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
@@ -1164,6 +1169,7 @@ export default function HitForHit() {
   const searchSpotifyTracksRef = useRef(searchSpotifyTracks);
   searchSpotifyTracksRef.current = searchSpotifyTracks;
   const [hostAwaitingTap, setHostAwaitingTap] = useState(false);
+  const [appleQueueReady, setAppleQueueReady] = useState(false);
 
   const roundPauseSpotify = useCallback(async () => {
     if (usesAppleMusic || !spotify.loggedIn || !spotify.deviceId) return;
@@ -1174,9 +1180,27 @@ export default function HitForHit() {
     if (!gs?.code || !isHost || gs.phase !== PHASES.LISTENING) return;
     const index = gs.playbackIndex ?? 0;
     if (index >= 2) return;
+    if (usesAppleMusic && appleMusicConnected && !appleQueueReady) {
+      showToast("Still loading track — wait a moment", 2500);
+      return;
+    }
 
-    // Unlock Safari audio in the same turn as the tap (before any await).
+    // Unlock audio + start Apple Music in the same turn as the tap (required on iOS).
     unlockPreviewAudio();
+    const gestureMusic =
+      usesAppleMusic && appleMusicConnected
+        ? playAppleMusicFromUserGesture()
+        : null;
+    const appleNeedsGesture =
+      usesAppleMusic && appleMusicConnected && isMobileLikeDevice();
+    const preferFullTrack = usesAppleMusic
+      ? appleMusicConnected && (!appleNeedsGesture || Boolean(gestureMusic))
+      : Boolean(spotify.loggedIn && spotify.deviceId);
+    const resolvedNow = hostPlaybackResolvedRef.current;
+    const primedPreview =
+      appleNeedsGesture && !gestureMusic && resolvedNow?.preview
+        ? primePreviewFromUserGesture(resolvedNow.preview)
+        : null;
 
     const epoch = ++playbackEpochRef.current;
     const pauseSpotify = usesAppleMusic ? undefined : roundPauseSpotify;
@@ -1217,10 +1241,10 @@ export default function HitForHit() {
               ? spotify.playUri
               : null,
           pauseSpotify,
-          preferFullTrack: usesAppleMusic
-            ? appleMusicConnected
-            : Boolean(spotify.loggedIn && spotify.deviceId),
+          preferFullTrack,
           activeProvider: activeMusicProvider,
+          appleGestureMusic: gestureMusic,
+          primedPreviewAudio: primedPreview,
         });
         if (playbackEpochRef.current !== epoch) return;
 
@@ -1269,9 +1293,14 @@ export default function HitForHit() {
 
         setHostAwaitingTap(false);
         if (result.type === "preview") {
-          showToast("Playing 30s preview", 3000);
+          showToast(
+            appleNeedsGesture && appleMusicConnected
+              ? "Playing 30s preview — full track needs a tap on this device"
+              : "Playing 30s preview — full track unavailable on this device",
+            4000
+          );
         } else if (result.type === "apple-music") {
-          showToast("Playing full track via Apple Music", 2500);
+          showToast("Playing full track — keep volume up, silent mode off", 3000);
         } else if (result.type === "spotify") {
           showToast("Playing via Spotify", 2500);
         }
@@ -1306,6 +1335,8 @@ export default function HitForHit() {
     if (gs?.phase !== PHASES.LISTENING) {
       listeningPrepIndexRef.current = -1;
       setHostAwaitingTap(false);
+      setAppleQueueReady(false);
+      clearPreparedAppleQueue();
       hostPlaybackResolvedRef.current = null;
       playbackCleanupRef.current?.();
       playbackCleanupRef.current = () => {};
@@ -1323,7 +1354,9 @@ export default function HitForHit() {
 
     let cancelled = false;
     setHostAwaitingTap(true);
+    setAppleQueueReady(false);
     hostPlaybackResolvedRef.current = null;
+    clearPreparedAppleQueue();
     playbackCleanupRef.current?.();
     playbackCleanupRef.current = () => {};
 
@@ -1335,8 +1368,14 @@ export default function HitForHit() {
         usesAppleMusic,
         searchSpotifyTracks: searchSpotifyTracksRef.current,
       });
-      if (!cancelled) {
-        hostPlaybackResolvedRef.current = resolved;
+      if (cancelled) return;
+      hostPlaybackResolvedRef.current = resolved;
+
+      if (usesAppleMusic && appleMusicConnected && resolved?.uri) {
+        const queued = await prepareAppleMusicQueue(resolved.uri);
+        if (!cancelled) setAppleQueueReady(queued);
+      } else {
+        setAppleQueueReady(true);
       }
     })();
 
@@ -1348,6 +1387,9 @@ export default function HitForHit() {
     gs?.playbackIndex,
     isHost,
     usesAppleMusic,
+    appleMusicConnected,
+    appleQueueReady,
+    showToast,
     roundPauseSpotify,
   ]);
 
@@ -2257,17 +2299,29 @@ export default function HitForHit() {
                   <button
                     type="button"
                     className="btn"
+                    disabled={
+                      usesAppleMusic && appleMusicConnected && !appleQueueReady
+                    }
                     style={{
                       width: "100%",
-                      background: C,
+                      background:
+                        usesAppleMusic && appleMusicConnected && !appleQueueReady
+                          ? "#3d3550"
+                          : C,
                       color: "#0D0A14",
                       fontSize: 22,
                       marginBottom: 12,
                       letterSpacing: ".06em",
+                      opacity:
+                        usesAppleMusic && appleMusicConnected && !appleQueueReady
+                          ? 0.7
+                          : 1,
                     }}
                     onClick={() => startHostPlayback()}
                   >
-                    ▶ TAP TO PLAY
+                    {usesAppleMusic && appleMusicConnected && !appleQueueReady
+                      ? "Loading track…"
+                      : "▶ TAP TO PLAY"}
                   </button>
                 )}
 

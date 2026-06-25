@@ -7,6 +7,11 @@ import {
   stopAppleMusicPlayback,
   resetAppleMusicPlayback,
   unlockPreviewAudio,
+  primePreviewFromUserGesture,
+  prepareAppleMusicQueue,
+  playAppleMusicFromUserGesture,
+  clearPreparedAppleQueue,
+  isMobileLikeDevice,
 } from "./musickit/musickitService.js";
 
 export function extractSongTitle(label) {
@@ -48,9 +53,13 @@ export async function resolveTrackForPlayback(meta, label, artist, deps) {
   return meta ?? null;
 }
 
-async function tryPlayPreview(trackMeta, limitSec = 30) {
+async function tryPlayPreview(trackMeta, limitSec = 30, primedAudio = null) {
   if (!trackMeta?.preview) return null;
   try {
+    if (primedAudio && !primedAudio.paused) {
+      playRoundTrack.activeAudio = primedAudio;
+      return { type: "preview", audio: primedAudio };
+    }
     unlockPreviewAudio();
     const audio = await playPreview(trackMeta.preview, {
       songId: trackMeta.id ?? trackMeta.uri ?? trackMeta.preview,
@@ -69,13 +78,13 @@ async function tryPlayPreview(trackMeta, limitSec = 30) {
   }
 }
 
-async function tryPlayAppleFull(trackMeta, activeProvider) {
+async function tryPlayAppleFull(trackMeta, activeProvider, gestureMusic = null) {
   const provider = trackMeta?.provider ?? activeProvider;
   if (!trackMeta?.uri || provider !== MUSIC_PROVIDERS.APPLE) {
     return null;
   }
   try {
-    const music = await playAppleMusicTrack(trackMeta.uri);
+    const music = await playAppleMusicTrack(trackMeta.uri, { gestureMusic });
     playRoundTrack.activeMusic = music;
     return { type: "apple-music", music };
   } catch (e) {
@@ -110,10 +119,15 @@ export async function playRoundTrack(
     preferFullTrack = false,
     previewLimitSec = 30,
     activeProvider,
+    appleGestureMusic = null,
+    primedPreviewAudio = null,
   } = {}
 ) {
   // Stop previews / Spotify only — do not music.stop() before Apple setQueue (PLAY_ACTIVITY)
-  await stopPreview();
+  // Keep the iOS audio session alive when MusicKit already started from the tap handler.
+  await stopPreview(null, {
+    keepAudioContext: Boolean(appleGestureMusic || primedPreviewAudio),
+  });
   playRoundTrack.activeAudio = null;
   if (pauseSpotify) {
     try {
@@ -129,7 +143,11 @@ export async function playRoundTrack(
 
   const tryFull = async () => {
     try {
-      const apple = await tryPlayAppleFull(meta, activeProvider);
+      const apple = await tryPlayAppleFull(
+        meta,
+        activeProvider,
+        appleGestureMusic
+      );
       if (apple) return apple;
       return await tryPlaySpotifyFull(meta, playSpotifyUri, activeProvider);
     } catch (e) {
@@ -140,12 +158,12 @@ export async function playRoundTrack(
   if (preferFullTrack) {
     const full = await tryFull();
     if (full && full.type !== "error") return full;
-    const preview = await tryPlayPreview(meta, previewLimitSec);
+    const preview = await tryPlayPreview(meta, previewLimitSec, primedPreviewAudio);
     if (preview?.type === "autoplay-blocked") return preview;
     if (preview) return preview;
     if (full?.type === "error") return full;
   } else {
-    const preview = await tryPlayPreview(meta, previewLimitSec);
+    const preview = await tryPlayPreview(meta, previewLimitSec, primedPreviewAudio);
     if (preview && preview.type !== "autoplay-blocked") return preview;
     const full = await tryFull();
     if (full?.type === "error") return full;

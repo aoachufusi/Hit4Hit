@@ -60,6 +60,7 @@ export async function configureMusicKit(developerToken) {
     suppressErrorDialog: true,
     app: musicKitAppConfig(),
   });
+  patchMusicKitAudioForMobile();
   return MusicKit.getInstance();
 }
 
@@ -316,6 +317,7 @@ export {
   stopPreviewAudio,
   stopPreview,
   unlockPreviewAudio,
+  primePreviewFromUserGesture,
 } from "../previewAudio.js";
 
 function musicKitInstance() {
@@ -326,11 +328,135 @@ function musicKitInstance() {
   }
 }
 
+let preparedQueueSongId = null;
+
+export function isMobileLikeDevice() {
+  if (typeof navigator === "undefined") return false;
+  return (
+    /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent))
+  );
+}
+
+/** iOS needs playsinline on MusicKit's injected audio element. */
+export function patchMusicKitAudioForMobile() {
+  if (typeof document === "undefined") return;
+  const fix = () => {
+    document.querySelectorAll("audio").forEach((el) => {
+      el.setAttribute("playsinline", "true");
+      el.setAttribute("webkit-playsinline", "true");
+      try {
+        el.playsInline = true;
+      } catch {
+        /* ignore */
+      }
+      if (el.volume === 0) el.volume = 1;
+    });
+  };
+  fix();
+  if (!patchMusicKitAudioForMobile._watching) {
+    patchMusicKitAudioForMobile._watching = true;
+    new MutationObserver(fix).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+  }
+}
+
+/** Queue a song while waiting — do not start playback until the host taps play. */
+export async function prepareAppleMusicQueue(catalogSongId) {
+  const songId = String(catalogSongId || "").trim();
+  if (!songId) return false;
+
+  const music = await ensureConfiguredMusicKit();
+  if (!music?.isAuthorized) return false;
+
+  try {
+    await music.setQueue({ song: songId, startPlaying: false });
+  } catch {
+    try {
+      await music.setQueue({ songs: [songId], startPlaying: false });
+    } catch {
+      preparedQueueSongId = null;
+      return false;
+    }
+  }
+
+  const item =
+    music.queue?.head ??
+    music.queue?.items?.[0] ??
+    music.queue?.nextPlayableItem;
+  if (music.player?.prepareToPlay && item) {
+    try {
+      await music.player.prepareToPlay(item);
+    } catch (e) {
+      console.warn("Apple Music prepareToPlay failed", e);
+    }
+  }
+
+  preparedQueueSongId = songId;
+  patchMusicKitAudioForMobile();
+  return true;
+}
+
+/**
+ * Call synchronously from ▶ TAP TO PLAY — iOS blocks play() unless it runs in the tap handler.
+ */
+export function playAppleMusicFromUserGesture() {
+  const music = musicKitInstance();
+  if (!music?.isAuthorized) return null;
+  if (!preparedQueueSongId) {
+    console.warn("Apple Music queue not prepared — tap play after track loads");
+    return null;
+  }
+
+  if (typeof music.volume === "number" && music.volume < 0.05) {
+    music.volume = 1;
+  }
+
+  patchMusicKitAudioForMobile();
+
+  try {
+    if (music.player?.play) {
+      music.player.play();
+    } else {
+      music.play();
+    }
+  } catch (e) {
+    console.warn("Apple Music gesture play failed", e);
+    return null;
+  }
+
+  patchMusicKitAudioForMobile();
+  return music;
+}
+
+export function clearPreparedAppleQueue() {
+  preparedQueueSongId = null;
+}
+
 /** Full Apple Music playback (host must be authorized). */
-export async function playAppleMusicTrack(catalogSongId) {
+export async function playAppleMusicTrack(catalogSongId, { gestureMusic = null } = {}) {
   const songId = String(catalogSongId || "").trim();
   if (!songId) {
     throw new Error("Missing Apple Music song id — pick the track from search");
+  }
+
+  if (gestureMusic) {
+    const playing = await waitUntilPlaying(gestureMusic, 10_000);
+    if (!playing) {
+      throw new Error(
+        "Apple Music did not start — turn off silent mode and raise volume"
+      );
+    }
+    const advanced = await waitForPlaybackAdvance(gestureMusic, 5000);
+    if (!advanced) {
+      throw new Error(
+        "Apple Music playback stalled — turn off silent mode or try preview"
+      );
+    }
+    patchMusicKitAudioForMobile();
+    return gestureMusic;
   }
 
   const startPlayback = async (music) => {
@@ -465,6 +591,7 @@ export function stopAppleMusicPlayback() {
 
 /** Hard stop when leaving the listening phase entirely. */
 export function resetAppleMusicPlayback() {
+  clearPreparedAppleQueue();
   const music = musicKitInstance();
   if (!music) return;
   try {
