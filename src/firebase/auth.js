@@ -159,6 +159,9 @@ export function formatFirebaseConnectError(err) {
   const code = err?.code || "";
   const msg = String(err?.message || err || "");
 
+  if (msg.includes("GET_GAME_TIMEOUT") || msg.includes("DB_CONNECTED_TIMEOUT")) {
+    return "Database connection timed out — try again or use the connection test on the home screen";
+  }
   if (msg.includes("TIMEOUT") || code === "auth/network-request-failed") {
     if (isLikelyChrome()) {
       return "Chrome blocked Firebase — disable extensions for this site or clear site data";

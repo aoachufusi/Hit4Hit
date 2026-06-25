@@ -8,6 +8,34 @@ let limitTimerRef = null;
 const BUFFER_MS = 80;
 const DEFAULT_LIMIT_SEC = 30;
 
+/** Call synchronously from a click/tap — unlocks Safari audio for later preview playback. */
+export function unlockPreviewAudio() {
+  if (typeof window === "undefined") return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx && !audioContextRef) {
+      audioContextRef = new Ctx();
+    }
+    if (audioContextRef?.state === "suspended") {
+      void audioContextRef.resume();
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const el = new Audio();
+    el.volume = 0.001;
+    el.src =
+      "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+    const p = el.play();
+    if (p?.then) {
+      p.then(() => el.pause()).catch(() => {});
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function stopPreviewAudio() {
   if (limitTimerRef) {
     clearTimeout(limitTimerRef);

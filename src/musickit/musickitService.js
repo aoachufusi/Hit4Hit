@@ -315,6 +315,7 @@ export {
   playPreview,
   stopPreviewAudio,
   stopPreview,
+  unlockPreviewAudio,
 } from "../previewAudio.js";
 
 function musicKitInstance() {
@@ -337,23 +338,56 @@ export async function playAppleMusicTrack(catalogSongId) {
       throw new Error("Apple Music not authorized — tap Connect again");
     }
 
-    try {
-      await music.setQueue({ song: songId, startPlaying: true });
-    } catch {
-      await music.setQueue({ song: songId });
-      await music.play();
+    if (typeof music.volume === "number" && music.volume < 0.05) {
+      music.volume = 1;
     }
+
+    const attempts = [
+      () => music.setQueue({ song: songId, startPlaying: true }),
+      () => music.setQueue({ songs: [songId], startPlaying: true }),
+      async () => {
+        await music.setQueue({ song: songId });
+        const item =
+          music.queue?.head ??
+          music.queue?.items?.[0] ??
+          music.queue?.nextPlayableItem;
+        if (music.player?.prepareToPlay && item) {
+          await music.player.prepareToPlay(item);
+        }
+        await music.play();
+      },
+    ];
+
+    let lastErr;
+    for (const attempt of attempts) {
+      try {
+        await attempt();
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (lastErr) throw lastErr;
 
     if (!music.isPlaying) {
       await music.play();
     }
 
-    const playing = await waitUntilPlaying(music, 5000);
+    const playing = await waitUntilPlaying(music, 8000);
     if (!playing) {
       throw new Error(
         "Apple Music did not start — check subscription, volume, and try Connect again"
       );
     }
+
+    const advanced = await waitForPlaybackAdvance(music, 3000);
+    if (!advanced) {
+      throw new Error(
+        "Apple Music playback stalled — try another track or use preview"
+      );
+    }
+
     return music;
   };
 
@@ -367,6 +401,23 @@ export async function playAppleMusicTrack(catalogSongId) {
     const music = await refreshMusicKitDeveloperToken();
     return startPlayback(music);
   }
+}
+
+function waitForPlaybackAdvance(music, timeoutMs) {
+  return new Promise((resolve) => {
+    const start = music.currentPlaybackTime ?? 0;
+    const deadline = Date.now() + timeoutMs;
+    const timer = setInterval(() => {
+      const now = music.currentPlaybackTime ?? 0;
+      if (now > start + 0.25) {
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() >= deadline) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, 200);
+  });
 }
 
 function waitUntilPlaying(music, timeoutMs) {

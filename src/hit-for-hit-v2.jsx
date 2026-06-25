@@ -33,6 +33,7 @@ import {
   subscribeToGame,
   castVote as firebaseCastVote,
   deleteGame,
+  resetDbReady,
 } from "./firebase/gameService.js";
 import { isFirebaseConfigured } from "./firebase/config.js";
 import {
@@ -41,6 +42,8 @@ import {
   formatFirebaseConnectError,
   isLikelyChrome,
 } from "./firebase/auth.js";
+import { runFirebaseDiagnostics } from "./firebase/diagnostics.js";
+import SyncDiagnosticsPanel from "./firebase/SyncDiagnosticsPanel.jsx";
 import { useSpotify } from "./useSpotify.js";
 import SongSearch from "./musickit/SongSearch.jsx";
 import { getInviteUrl } from "./appUrl.js";
@@ -67,6 +70,7 @@ import {
   configureMusicKit,
   getDeveloperToken,
   unauthorizeHost,
+  unlockPreviewAudio,
 } from "./musickit/musickitService.js";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
@@ -245,6 +249,8 @@ export default function HitForHit() {
   const [confettiItems, setConfettiItems] = useState(null);
   const [connStatus, setConnStatus] = useState("ok"); // "ok"|"error"|"syncing" (Firebase sync, not Spotify)
   const [syncStuck, setSyncStuck] = useState(false);
+  const [syncDiag, setSyncDiag] = useState(null);
+  const [syncDiagLoading, setSyncDiagLoading] = useState(false);
   const [toast, setToast]       = useState(null);
 
   const showToast = useCallback((msg, dur = 2500) => {
@@ -273,6 +279,37 @@ export default function HitForHit() {
   const syncPollRef = useRef(null);
   const syncWatchdogRef = useRef(null);
 
+  const runSyncDiagnostics = useCallback(async () => {
+    setSyncDiagLoading(true);
+    try {
+      const result = await runFirebaseDiagnostics({
+        gameCode:
+          activeGameCodeRef.current ||
+          joinCode.trim().toUpperCase() ||
+          undefined,
+      });
+      setSyncDiag(result);
+      return result;
+    } catch (e) {
+      const fallback = {
+        ok: false,
+        steps: [
+          {
+            id: "error",
+            label: "Diagnostics",
+            ok: false,
+            detail: String(e?.message || e),
+          },
+        ],
+        at: Date.now(),
+      };
+      setSyncDiag(fallback);
+      return fallback;
+    } finally {
+      setSyncDiagLoading(false);
+    }
+  }, [joinCode]);
+
   const stopSyncHelpers = useCallback(() => {
     if (syncPollRef.current) {
       clearInterval(syncPollRef.current);
@@ -289,6 +326,7 @@ export default function HitForHit() {
       setGs(normalizeGameState(fresh));
       setConnStatus("ok");
       setSyncStuck(false);
+      setSyncDiag(null);
       stopSyncHelpers();
     } catch (e) {
       console.error("Game state sync failed", e);
@@ -375,6 +413,7 @@ export default function HitForHit() {
     setConnStatus("syncing");
     try {
       await hardResetAuthSession();
+      resetDbReady();
       await ensureAuthWithRetry();
       const raw = await getGame(code);
       if (raw) applyGameSnapshot(raw);
@@ -384,8 +423,14 @@ export default function HitForHit() {
       showToast(formatFirebaseConnectError(e), 5000);
       setConnStatus("error");
       setSyncStuck(true);
+      runSyncDiagnostics();
     }
-  }, [startListening, applyGameSnapshot, showToast]);
+  }, [startListening, applyGameSnapshot, showToast, runSyncDiagnostics]);
+
+  useEffect(() => {
+    if (!syncStuck) return;
+    runSyncDiagnostics();
+  }, [syncStuck, runSyncDiagnostics]);
 
   useEffect(() => {
     return () => {
@@ -395,11 +440,13 @@ export default function HitForHit() {
   }, [stopSyncHelpers]);
 
   useEffect(() => {
-    ensureAuthWithRetry().then((user) => {
-      setUserId(user.uid);
-    }).catch((err) => {
-      console.error("Firebase anonymous auth failed", err);
-    });
+    ensureAuthWithRetry()
+      .then((user) => {
+        setUserId(user.uid);
+      })
+      .catch((err) => {
+        console.error("Firebase anonymous auth failed", err);
+      });
   }, []);
 
   useEffect(() => {
@@ -489,33 +536,7 @@ export default function HitForHit() {
       return;
     }
 
-    const generateUniqueCode = async () => {
-      for (let attempts = 0; attempts < 10; attempts++) {
-        const code = generateCode();
-        let existing;
-        try {
-          existing = await getGame(code);
-        } catch (e) {
-          logClientError("Room code availability check failed:", e);
-          throw new Error("CHECK_FAILED");
-        }
-        if (existing === null) return code;
-      }
-      throw new Error("COLLISION_EXHAUSTED");
-    };
-
-    let code;
-    try {
-      code = await generateUniqueCode();
-    } catch (e) {
-      setConnStatus("error");
-      if (e?.message === "COLLISION_EXHAUSTED") {
-        showToast("Could not generate a room code — try again.");
-      } else {
-        showToast(formatFirebaseConnectError(e) || "Could not reach the game server — try again.");
-      }
-      return;
-    }
+    const code = generateCode();
 
     const r = Math.min(12, Math.max(1, Number(rounds) || 5));
     const newGame = {
@@ -1149,111 +1170,127 @@ export default function HitForHit() {
     await spotify.pausePlayback();
   }, [usesAppleMusic, spotify]);
 
-  const startHostPlayback = useCallback(async () => {
+  const startHostPlayback = useCallback(() => {
     if (!gs?.code || !isHost || gs.phase !== PHASES.LISTENING) return;
     const index = gs.playbackIndex ?? 0;
     if (index >= 2) return;
 
+    // Unlock Safari audio in the same turn as the tap (before any await).
+    unlockPreviewAudio();
+
     const epoch = ++playbackEpochRef.current;
     const pauseSpotify = usesAppleMusic ? undefined : roundPauseSpotify;
 
-    let resolved = hostPlaybackResolvedRef.current;
-    if (!resolved) {
-      const meta = index === 0 ? gs.song1Meta : gs.song2Meta;
-      const label = index === 0 ? gs.song1 : gs.song2;
-      const artist = index === 0 ? gs.artist1 : gs.artist2;
-      resolved = await resolveTrackForPlayback(meta, label, artist, {
-        usesAppleMusic,
-        searchSpotifyTracks: searchSpotifyTracksRef.current,
-      });
-      hostPlaybackResolvedRef.current = resolved;
-    }
+    const run = async () => {
+      let resolved = hostPlaybackResolvedRef.current;
+      if (!resolved) {
+        const meta = index === 0 ? gs.song1Meta : gs.song2Meta;
+        const label = index === 0 ? gs.song1 : gs.song2;
+        const artist = index === 0 ? gs.artist1 : gs.artist2;
+        resolved = await resolveTrackForPlayback(meta, label, artist, {
+          usesAppleMusic,
+          searchSpotifyTracks: searchSpotifyTracksRef.current,
+        });
+        hostPlaybackResolvedRef.current = resolved;
+      }
 
-    if (playbackEpochRef.current !== epoch) return;
+      if (playbackEpochRef.current !== epoch) return;
 
-    playbackCleanupRef.current?.();
-    playbackCleanupRef.current = () => {};
+      playbackCleanupRef.current?.();
+      playbackCleanupRef.current = () => {};
 
-    try {
-      if (usesAppleMusic && appleMusicConnected) {
-        const MusicKit = window.MusicKit;
-        const music = MusicKit?.getInstance?.();
-        if (music && !music.isAuthorized) {
-          setAppleMusicConnected(false);
-          showToast("Apple Music session expired — tap Connect again", 4500);
+      try {
+        if (usesAppleMusic && appleMusicConnected) {
+          const MusicKit = window.MusicKit;
+          const music = MusicKit?.getInstance?.();
+          if (music && !music.isAuthorized) {
+            setAppleMusicConnected(false);
+            showToast("Apple Music session expired — tap Connect again", 4500);
+            setHostAwaitingTap(true);
+            return;
+          }
+        }
+
+        const result = await playRoundTrack(resolved, {
+          playSpotifyUri:
+            !usesAppleMusic && spotify.loggedIn && spotify.deviceId
+              ? spotify.playUri
+              : null,
+          pauseSpotify,
+          preferFullTrack: usesAppleMusic
+            ? appleMusicConnected
+            : Boolean(spotify.loggedIn && spotify.deviceId),
+          activeProvider: activeMusicProvider,
+        });
+        if (playbackEpochRef.current !== epoch) return;
+
+        if (result?.type === "error") {
+          const detail = extractErrorMessage(result.error);
+          logClientError("Round playback failed:", result.error);
+          showToast(
+            detail.length <= 120
+              ? detail
+              : "Playback failed — try Connect again or pick from search",
+            4500
+          );
           setHostAwaitingTap(true);
           return;
         }
-      }
 
-      const result = await playRoundTrack(resolved, {
-        playSpotifyUri:
-          !usesAppleMusic && spotify.loggedIn && spotify.deviceId
-            ? spotify.playUri
-            : null,
-        pauseSpotify,
-        preferFullTrack: usesAppleMusic
-          ? appleMusicConnected
-          : Boolean(spotify.loggedIn && spotify.deviceId),
-        activeProvider: activeMusicProvider,
-      });
-      if (playbackEpochRef.current !== epoch) return;
+        if (result?.type === "autoplay-blocked") {
+          showToast("Tap ▶ TAP TO PLAY again to allow audio", 4000);
+          setHostAwaitingTap(true);
+          return;
+        }
+        if (result?.type === "none") {
+          logClientError("Playback returned none", {
+            resolved,
+            usesAppleMusic,
+            appleMusicConnected,
+          });
+          if (usesAppleMusic) {
+            if (!appleMusicConnected) {
+              showToast("Couldn't play — tap Connect Apple Music first");
+            } else if (!resolved?.uri) {
+              showToast("Couldn't play — pick each song from search results");
+            } else {
+              showToast("Couldn't play — try Connect again or pick another track");
+            }
+          } else if (!spotify.loggedIn) {
+            showToast("Couldn't play — log in to Spotify");
+          } else if (!spotify.deviceId) {
+            showToast("Couldn't play — wait for Spotify player to connect");
+          } else {
+            showToast("Couldn't play this song — pick a track from search results");
+          }
+          setHostAwaitingTap(true);
+          return;
+        }
 
-      if (result?.type === "error") {
-        const detail = extractErrorMessage(result.error);
-        logClientError("Round playback failed:", result.error);
+        setHostAwaitingTap(false);
+        if (result.type === "preview") {
+          showToast("Playing 30s preview", 3000);
+        } else if (result.type === "apple-music") {
+          showToast("Playing full track via Apple Music", 2500);
+        } else if (result.type === "spotify") {
+          showToast("Playing via Spotify", 2500);
+        }
+        playbackCleanupRef.current = waitForPlaybackEnd(result, () => {
+          if (playbackEpochRef.current === epoch) {
+            advancePlayback();
+          }
+        });
+      } catch (e) {
+        logClientError("Round playback failed:", e);
         showToast(
-          detail.length <= 120
-            ? detail
-            : "Playback failed — try Connect again or pick from search",
+          extractErrorMessage(e) || "Playback failed — try again",
           4500
         );
         setHostAwaitingTap(true);
-        return;
       }
+    };
 
-      if (result?.type === "autoplay-blocked") {
-        setHostAwaitingTap(true);
-        return;
-      }
-      if (result?.type === "none") {
-        logClientError("Playback returned none", { resolved, usesAppleMusic, appleMusicConnected });
-        if (usesAppleMusic) {
-          if (!appleMusicConnected) {
-            showToast("Couldn't play — tap Connect Apple Music first");
-          } else if (!resolved?.uri) {
-            showToast("Couldn't play — pick each song from search results");
-          } else {
-            showToast("Couldn't play — try Connect again or pick another track");
-          }
-        } else if (!spotify.loggedIn) {
-          showToast("Couldn't play — log in to Spotify");
-        } else if (!spotify.deviceId) {
-          showToast("Couldn't play — wait for Spotify player to connect");
-        } else {
-          showToast("Couldn't play this song — pick a track from search results");
-        }
-        setHostAwaitingTap(true);
-        return;
-      }
-
-      setHostAwaitingTap(false);
-      if (result.type === "preview") {
-        showToast("Playing preview (30s) — connect Apple Music for full songs", 3500);
-      }
-      playbackCleanupRef.current = waitForPlaybackEnd(result, () => {
-        if (playbackEpochRef.current === epoch) {
-          advancePlayback();
-        }
-      });
-    } catch (e) {
-      logClientError("Round playback failed:", e);
-      showToast(
-        extractErrorMessage(e) || "Playback failed — try again",
-        4500
-      );
-      setHostAwaitingTap(true);
-    }
+    run();
   }, [
     gs,
     isHost,
@@ -1542,7 +1579,19 @@ export default function HitForHit() {
               <span className="bf" style={{fontSize:10,color:MUTED3}} title="Host logs in to Spotify for playback">{musicLabel}</span>
             )}
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:4}} title="Game sync via Firebase Realtime Database">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              cursor: connStatus === "error" ? "pointer" : "default",
+            }}
+            title={
+              connStatus === "error"
+                ? "Sync failed — scroll down for connection test"
+                : "Game sync via Firebase Realtime Database"
+            }
+          >
             <div className="conn-dot" style={{background: connStatus==="ok"?"#4ade80": connStatus==="syncing"?"#facc15":"#f87171"}}/>
             <span className="bf" style={{color:MUTED2,fontSize:10}}>
               {connStatus==="ok" ? "synced" : connStatus==="syncing" ? "syncing…" : "no sync"}
@@ -1598,7 +1647,7 @@ export default function HitForHit() {
                 <div className="bf" style={{color:MUTED2,fontSize:12,lineHeight:1.5,marginBottom:14}}>
                   {isLikelyChrome()
                     ? "Chrome is blocking Firebase on this device (Safari works). Usually a Chrome extension or corrupted site storage."
-                    : "Connection stuck — try another browser or clear site data for this site."}
+                    : "Connection stuck — see the test below for which step failed."}
                 </div>
                 <button
                   className="btn"
@@ -1607,11 +1656,15 @@ export default function HitForHit() {
                 >
                   Retry connection
                 </button>
+                <SyncDiagnosticsPanel
+                  result={syncDiag}
+                  loading={syncDiagLoading}
+                  onRunTest={runSyncDiagnostics}
+                />
                 {isLikelyChrome() && (
-                  <div className="bf" style={{color:MUTED3,fontSize:11,lineHeight:1.55,textAlign:"left"}}>
+                  <div className="bf" style={{color:MUTED3,fontSize:11,lineHeight:1.55,textAlign:"left",marginTop:10}}>
                     <div style={{marginBottom:6}}>In Chrome: lock icon → Site settings → Clear data</div>
-                    <div style={{marginBottom:6}}>Or chrome://extensions — disable ad blockers for hit4hit.app</div>
-                    <div>Check &quot;Allow in incognito&quot; isn&apos;t enabled on extensions you use in private mode</div>
+                    <div>Or chrome://extensions — disable ad blockers for hit4hit.app</div>
                   </div>
                 )}
               </div>
@@ -1643,6 +1696,17 @@ export default function HitForHit() {
                 <div className="bf" style={{color:"#f87171",fontSize:13,lineHeight:1.5}}>
                   Firebase is not configured. Add <code>VITE_FIREBASE_*</code> to <code>.env</code>, save the file, and restart <code>npm run dev</code>.
                 </div>
+              </div>
+            )}
+
+            {isFirebaseConfigured && (
+              <div style={{ marginBottom: "1rem" }}>
+                <SyncDiagnosticsPanel
+                  result={syncDiag}
+                  loading={syncDiagLoading}
+                  onRunTest={runSyncDiagnostics}
+                  compact
+                />
               </div>
             )}
 
@@ -1714,9 +1778,19 @@ export default function HitForHit() {
               {joinError && <div className="bf" style={{color:"#f87171",fontSize:12,marginTop:6}}>{joinError}</div>}
             </div>
 
-            <button className="btn" disabled={!myName.trim()||joinCode.length<6} onClick={joinGame}
-              style={{background:myName.trim()&&joinCode.length===6?C2:SURFACE,color:myName.trim()&&joinCode.length===6?"#0D0A14":MUTED2,marginBottom:10}}>
-              JOIN GAME
+            {(connStatus === "error" || syncStuck) && (
+              <div style={{ marginBottom: "1rem" }}>
+                <SyncDiagnosticsPanel
+                  result={syncDiag}
+                  loading={syncDiagLoading}
+                  onRunTest={runSyncDiagnostics}
+                />
+              </div>
+            )}
+
+            <button className="btn" disabled={!myName.trim()||joinCode.length<6||connStatus==="syncing"} onClick={joinGame}
+              style={{background:myName.trim()&&joinCode.length===6&&connStatus!=="syncing"?C2:SURFACE,color:myName.trim()&&joinCode.length===6&&connStatus!=="syncing"?"#0D0A14":MUTED2,marginBottom:10}}>
+              {connStatus==="syncing" ? "Connecting…" : "JOIN GAME"}
             </button>
             <button className="btn-ghost" style={{justifyContent:"center",width:"100%"}} onClick={()=>setScreen("home")}>← Back</button>
           </div>

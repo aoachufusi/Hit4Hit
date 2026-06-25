@@ -6,6 +6,7 @@ import {
   playAppleMusicTrack,
   stopAppleMusicPlayback,
   resetAppleMusicPlayback,
+  unlockPreviewAudio,
 } from "./musickit/musickitService.js";
 
 export function extractSongTitle(label) {
@@ -50,6 +51,7 @@ export async function resolveTrackForPlayback(meta, label, artist, deps) {
 async function tryPlayPreview(trackMeta, limitSec = 30) {
   if (!trackMeta?.preview) return null;
   try {
+    unlockPreviewAudio();
     const audio = await playPreview(trackMeta.preview, {
       songId: trackMeta.id ?? trackMeta.uri ?? trackMeta.preview,
       limitSec,
