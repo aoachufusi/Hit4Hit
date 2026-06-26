@@ -16,6 +16,7 @@ import {
 } from "./spotifyAuth.js";
 import {
   createSpotifyPlayerSync,
+  isMobileSpotifyClient,
   loadSpotifySdk,
   pausePlayback as pauseSpotifyDevice,
   pickExternalSpotifyDevice,
@@ -44,7 +45,14 @@ export function SpotifyProvider({ children }) {
   const [sdkLoaded, setSdkLoaded] = useState(false);
   const [playerStatus, setPlayerStatus] = useState("");
   const playerRef = useRef(null);
+  const deviceIdRef = useRef(null);
   const connectPromiseRef = useRef(null);
+
+  const setPlaybackDevice = useCallback((id, type) => {
+    deviceIdRef.current = id;
+    setDeviceId(id);
+    setDeviceType(type);
+  }, []);
 
   const getAccessToken = useCallback(async () => {
     const s = getStoredSession();
@@ -110,6 +118,7 @@ export function SpotifyProvider({ children }) {
   useEffect(() => {
     if (!session?.access_token) {
       queueMicrotask(() => {
+        deviceIdRef.current = null;
         setDeviceId(null);
         setDeviceType(null);
         setSdkLoaded(false);
@@ -145,70 +154,83 @@ export function SpotifyProvider({ children }) {
     const device = await pickExternalSpotifyDevice(token);
     if (!device?.id) {
       throw new Error(
-        "No Spotify device found — open the Spotify app on this phone"
+        "No Spotify device found — open the Spotify app on this phone, then tap Connect player"
       );
     }
-    setDeviceId(device.id);
-    setDeviceType("external");
+    setPlaybackDevice(device.id, "external");
     setPlayerStatus("");
     return device.id;
-  }, [getAccessToken]);
+  }, [getAccessToken, setPlaybackDevice]);
+
+  const connectWebPlayer = useCallback(async () => {
+    if (!window.Spotify?.Player) {
+      throw new Error("Spotify player still loading — wait a moment and tap again");
+    }
+
+    const { player, device_id } = await createSpotifyPlayerSync(getAccessToken);
+    playerRef.current = player;
+    const token = await getAccessToken();
+    await transferPlaybackToDevice(token, device_id);
+    if (typeof player.activateElement === "function") {
+      try {
+        await player.activateElement();
+      } catch {
+        /* ignore */
+      }
+    }
+    setPlaybackDevice(device_id, "web");
+    setPlayerStatus("");
+    return device_id;
+  }, [getAccessToken, setPlaybackDevice]);
 
   /**
-   * Start synchronously inside a click/tap — required on Safari.
-   * Falls back to the user's Spotify app if the in-browser player fails.
+   * Start inside a click/tap — required on Safari.
+   * Mobile: try Spotify app first; desktop: in-browser player first.
    */
   const connectPlayerFromUserGesture = useCallback(() => {
     if (!session?.access_token) {
       return Promise.reject(new Error("Not logged in to Spotify"));
     }
-    if (deviceId) return Promise.resolve(deviceId);
-    if (connectPromiseRef.current) return connectPromiseRef.current;
-
-    if (!window.Spotify?.Player) {
-      return Promise.reject(
-        new Error("Spotify player still loading — wait a moment and tap again")
-      );
+    if (deviceIdRef.current) {
+      return Promise.resolve(deviceIdRef.current);
     }
+    if (connectPromiseRef.current) return connectPromiseRef.current;
 
     setPlayerStatus("Connecting Spotify player…");
 
-    connectPromiseRef.current = createSpotifyPlayerSync(getAccessToken)
-      .then(async ({ player, device_id }) => {
-        playerRef.current = player;
-        const token = await getAccessToken();
-        await transferPlaybackToDevice(token, device_id);
-        if (typeof player.activateElement === "function") {
-          try {
-            await player.activateElement();
-          } catch {
-            /* ignore */
-          }
-        }
-        setDeviceId(device_id);
-        setDeviceType("web");
-        setPlayerStatus("");
-        return device_id;
-      })
-      .catch(async (err) => {
-        logClientError("Spotify web player failed, trying Spotify app:", err);
+    const run = async () => {
+      const mobile = isMobileSpotifyClient();
+      const attempts = mobile
+        ? [connectExternalDevice, connectWebPlayer]
+        : [connectWebPlayer, connectExternalDevice];
+
+      let lastErr;
+      for (const attempt of attempts) {
         try {
-          return await connectExternalDevice();
-        } catch (externalErr) {
-          const detail =
-            externalErr?.message ||
-            err?.message ||
-            "Spotify playback unavailable";
-          setPlayerStatus(detail);
-          throw externalErr;
+          return await attempt();
+        } catch (e) {
+          lastErr = e;
+          logClientError("Spotify connect attempt failed:", e);
         }
-      })
-      .finally(() => {
-        connectPromiseRef.current = null;
-      });
+      }
+
+      const detail =
+        lastErr?.message ||
+        "Spotify playback unavailable — open the Spotify app and try again";
+      setPlayerStatus(detail);
+      throw lastErr || new Error(detail);
+    };
+
+    connectPromiseRef.current = run().finally(() => {
+      connectPromiseRef.current = null;
+    });
 
     return connectPromiseRef.current;
-  }, [session?.access_token, deviceId, getAccessToken, connectExternalDevice]);
+  }, [
+    session?.access_token,
+    connectExternalDevice,
+    connectWebPlayer,
+  ]);
 
   const login = useCallback(async () => {
     window.location.href = await buildAuthorizeUrl();
@@ -222,6 +244,7 @@ export function SpotifyProvider({ children }) {
     }
     playerRef.current = null;
     connectPromiseRef.current = null;
+    deviceIdRef.current = null;
     clearStoredSession();
     setSession(null);
     setDeviceId(null);
@@ -246,17 +269,19 @@ export function SpotifyProvider({ children }) {
   );
 
   const playUri = useCallback(
-    async (uri) => {
+    async (uri, targetDeviceId) => {
       const token = await getAccessToken();
-      if (!deviceId) {
+      const id = targetDeviceId || deviceIdRef.current;
+      if (!id) {
         throw new Error("Spotify player not connected — tap Connect player");
       }
-      await playTrackUris(token, deviceId, [uri]);
+      await playTrackUris(token, id, [uri]);
     },
-    [deviceId, getAccessToken]
+    [getAccessToken]
   );
 
   const pausePlayback = useCallback(async () => {
+    const id = deviceIdRef.current;
     if (deviceType === "web") {
       try {
         playerRef.current?.pause?.();
@@ -264,10 +289,10 @@ export function SpotifyProvider({ children }) {
         /* ignore */
       }
     }
-    if (!deviceId) return;
+    if (!id) return;
     const token = await getAccessToken();
-    await pauseSpotifyDevice(token, deviceId);
-  }, [deviceId, deviceType, getAccessToken]);
+    await pauseSpotifyDevice(token, id);
+  }, [deviceType, getAccessToken]);
 
   const playbackReady = Boolean(deviceId);
 

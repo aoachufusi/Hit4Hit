@@ -5,6 +5,10 @@ export function loadSpotifySdk() {
   window.__spotify_sdk_loading = new Promise((resolve, reject) => {
     const existing = document.getElementById("spotify-player-sdk");
     if (existing) {
+      if (window.Spotify) {
+        resolve();
+        return;
+      }
       existing.addEventListener("load", () => resolve());
       existing.addEventListener("error", () =>
         reject(new Error("Spotify SDK load error"))
@@ -117,13 +121,28 @@ export async function listSpotifyDevices(accessToken) {
 }
 
 export async function pickExternalSpotifyDevice(accessToken) {
-  const devices = await listSpotifyDevices(accessToken);
+  let devices = [];
+  try {
+    devices = await listSpotifyDevices(accessToken);
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (/Spotify API 401|403/.test(msg)) throw e;
+    return null;
+  }
   if (!devices.length) return null;
   return (
     devices.find((d) => d.is_active) ||
     devices.find((d) => d.type === "Smartphone") ||
     devices.find((d) => d.type === "Computer") ||
     devices[0]
+  );
+}
+
+export function isMobileSpotifyClient() {
+  if (typeof navigator === "undefined") return false;
+  return (
+    /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent))
   );
 }
 

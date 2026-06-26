@@ -162,7 +162,7 @@ async function tryPlaySpotifyFull(trackMeta, playSpotifyUri, activeProvider) {
     return { type: "spotify" };
   } catch (e) {
     console.warn("Spotify full playback failed", e);
-    throw e;
+    return null;
   }
 }
 

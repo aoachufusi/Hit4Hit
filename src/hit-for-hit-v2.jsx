@@ -1214,8 +1214,9 @@ export default function HitForHit() {
     const preferGesturePreview =
       Boolean(primedPreview) && hasPreview && (!appleWantsFull || mobileSafariPreview);
 
+    let spotifyDeviceId = spotify.deviceId;
     let spotifyConnectPromise = null;
-    if (!usesAppleMusic && spotify.loggedIn && !spotify.playbackReady) {
+    if (!usesAppleMusic && spotify.loggedIn && !spotifyDeviceId) {
       spotifyConnectPromise = spotify.connectPlayerFromUserGesture();
     }
 
@@ -1253,12 +1254,12 @@ export default function HitForHit() {
         }
 
         let spotifyReady =
-          !usesAppleMusic && spotify.loggedIn && spotify.playbackReady;
+          !usesAppleMusic && spotify.loggedIn && Boolean(spotifyDeviceId);
 
         if (spotifyConnectPromise) {
           try {
-            await spotifyConnectPromise;
-            spotifyReady = true;
+            spotifyDeviceId = await spotifyConnectPromise;
+            spotifyReady = Boolean(spotifyDeviceId);
           } catch (e) {
             logClientError("Spotify player connect failed:", e);
             showToast(
@@ -1274,8 +1275,13 @@ export default function HitForHit() {
         const preferFullTrack =
           appleWantsFull && !mobileSafariPreview ? true : spotifyReady;
 
+        const playSpotifyUri =
+          spotifyReady && spotifyDeviceId
+            ? (uri) => spotify.playUri(uri, spotifyDeviceId)
+            : null;
+
         const result = await playRoundTrack(resolved, {
-          playSpotifyUri: spotifyReady ? spotify.playUri : null,
+          playSpotifyUri,
           pauseSpotify,
           preferFullTrack,
           activeProvider: activeMusicProvider,
@@ -1321,10 +1327,10 @@ export default function HitForHit() {
             }
           } else if (!spotify.loggedIn) {
             showToast("Couldn't play — log in to Spotify");
-          } else if (!spotify.playbackReady) {
+          } else if (!spotifyDeviceId && !spotify.playbackReady) {
             showToast(
-              "Couldn't play — tap Connect player above, then tap ▶ again",
-              4500
+              "Couldn't play — open Spotify app, tap Connect player, then ▶ again",
+              5000
             );
           } else {
             showToast("Couldn't play this song — pick a track from search results");
@@ -1674,21 +1680,21 @@ export default function HitForHit() {
                       type="button"
                       className="btn-ghost"
                       style={{ padding: "4px 10px", fontSize: 11 }}
-                      disabled={!spotify.sdkLoaded}
                       onClick={() => {
                         spotify
                           .connectPlayerFromUserGesture()
+                          .then(() => showToast("Spotify player connected", 2500))
                           .catch((e) => {
                             logClientError("Spotify connect failed:", e);
                             showToast(
                               extractErrorMessage(e) ||
-                                "Couldn't connect Spotify player",
-                              4000
+                                "Couldn't connect — open Spotify app first",
+                              5000
                             );
                           });
                       }}
                     >
-                      {spotify.sdkLoaded ? "Connect player" : "Loading…"}
+                      Connect player
                     </button>
                   )}
                   <button
@@ -1964,7 +1970,7 @@ export default function HitForHit() {
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
                 <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
                   {spotify.playerStatus ||
-                    "Tap Connect player above to enable Spotify playback. On iPhone, you may need the Spotify app open."}
+                    "Tap Connect player above. On iPhone, open the Spotify app first (Premium required)."}
                 </div>
               </div>
             )}
