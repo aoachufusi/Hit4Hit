@@ -8,6 +8,7 @@ import {
   resetAppleMusicPlayback,
   unlockPreviewAudio,
   isPreviewActivelyPlaying,
+  preparePreviewAudio,
 } from "./musickit/musickitService.js";
 
 export function extractSongTitle(label) {
@@ -120,7 +121,30 @@ async function tryPlayAppleFull(trackMeta, activeProvider, gestureMusic = null) 
     return { type: "apple-music", music };
   } catch (e) {
     console.warn("Apple Music full playback failed", e);
-    throw e;
+    return null;
+  }
+}
+
+async function tryPreviewFallback(trackMeta, limitSec = 30) {
+  if (!trackMeta?.preview) return null;
+  resetAppleMusicPlayback();
+  playRoundTrack.activeMusic = null;
+  await stopPreview();
+  unlockPreviewAudio();
+  try {
+    await preparePreviewAudio(trackMeta.preview);
+    const audio = await playPreview(trackMeta.preview, {
+      songId: trackMeta.id ?? trackMeta.uri ?? trackMeta.preview,
+      limitSec,
+    });
+    playRoundTrack.activeAudio = audio;
+    return { type: "preview", audio };
+  } catch (e) {
+    if (e?.name === "NotAllowedError") {
+      return { type: "autoplay-blocked" };
+    }
+    console.warn("Preview fallback failed", e);
+    return null;
   }
 }
 
@@ -219,9 +243,9 @@ export async function playRoundTrack(
       }
       return full;
     }
-    stopAppleMusicPlayback();
-    playRoundTrack.activeMusic = null;
-    const preview = await tryPlayPreview(meta, previewLimitSec, primedPreviewAudio);
+    const preview =
+      (await tryPlayPreview(meta, previewLimitSec, primedPreviewAudio)) ||
+      (await tryPreviewFallback(meta, previewLimitSec));
     if (preview?.type === "autoplay-blocked") return preview;
     if (preview) return preview;
     if (full?.type === "error") return full;

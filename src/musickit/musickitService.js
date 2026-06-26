@@ -476,15 +476,9 @@ export async function playAppleMusicTrack(catalogSongId, { gestureMusic = null }
         "Apple Music did not start — turn off silent mode and raise volume"
       );
     }
-    const advanced = await waitForPlaybackAdvance(gestureMusic, 5000);
-    if (!advanced) {
-      throw new Error(
-        "Apple Music playback stalled — turn off silent mode or try preview"
-      );
-    }
     patchMusicKitAudioForMobile();
-    const audible = await verifyAppleMusicAudible(gestureMusic);
-    if (!audible) {
+    const confirmed = await confirmMusicKitPlayback(gestureMusic, 8000);
+    if (!confirmed) {
       throw new Error("Apple Music did not produce audio — falling back to preview");
     }
     return gestureMusic;
@@ -538,14 +532,14 @@ export async function playAppleMusicTrack(catalogSongId, { gestureMusic = null }
       );
     }
 
-    const advanced = await waitForPlaybackAdvance(music, 3000);
-    if (!advanced) {
+    patchMusicKitAudioForMobile();
+    const confirmed = await confirmMusicKitPlayback(music, 8000);
+    if (!confirmed) {
       throw new Error(
-        "Apple Music playback stalled — try another track or use preview"
+        "Apple Music did not produce audio — falling back to preview"
       );
     }
 
-    patchMusicKitAudioForMobile();
     return music;
   };
 
@@ -567,7 +561,7 @@ function waitForPlaybackAdvance(music, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     const timer = setInterval(() => {
       const now = music.currentPlaybackTime ?? 0;
-      if (now > start + 0.25) {
+      if (now > start + 0.1) {
         clearInterval(timer);
         resolve(true);
       } else if (Date.now() >= deadline) {
@@ -576,6 +570,13 @@ function waitForPlaybackAdvance(music, timeoutMs) {
       }
     }, 200);
   });
+}
+
+async function confirmMusicKitPlayback(music, timeoutMs = 8000) {
+  if (await waitForPlaybackAdvance(music, timeoutMs)) return true;
+  if (await verifyAppleMusicAudible(music, 2500)) return true;
+  if (music?.isPlaying && music?.nowPlayingItem) return true;
+  return false;
 }
 
 function waitUntilPlaying(music, timeoutMs) {

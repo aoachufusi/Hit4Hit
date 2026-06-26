@@ -1201,10 +1201,22 @@ export default function HitForHit() {
     // Full track needs the tap gesture on Apple Music — start that first, not preview.
     const gestureMusic = appleWantsFull ? playAppleMusicFromUserGesture() : null;
 
-    const primedPreview =
-      !appleWantsFull && hasPreview
-        ? playPreviewFromUserGesture(resolvedNow.preview)
-        : null;
+    let primedPreview = null;
+    if (hasPreview) {
+      if (appleWantsFull) {
+        // Same tap: unlock preview so fallback can resume if full track fails (iOS).
+        primedPreview = playPreviewFromUserGesture(resolvedNow.preview);
+        if (primedPreview) {
+          try {
+            primedPreview.pause();
+          } catch {
+            /* ignore */
+          }
+        }
+      } else {
+        primedPreview = playPreviewFromUserGesture(resolvedNow.preview);
+      }
+    }
 
     const preferGesturePreview = !appleWantsFull && Boolean(primedPreview) && hasPreview;
     const preferFullTrack = appleWantsFull
@@ -1262,9 +1274,11 @@ export default function HitForHit() {
           const detail = extractErrorMessage(result.error);
           logClientError("Round playback failed:", result.error);
           showToast(
-            detail.length <= 120
-              ? detail
-              : "Playback failed — try Connect again or pick from search",
+            resolved?.preview
+              ? "Couldn't play full track — tap ▶ again for 30s preview"
+              : detail.length <= 120
+                ? detail
+                : "Playback failed — try Connect again or pick from search",
             4500
           );
           setHostAwaitingTap(true);
