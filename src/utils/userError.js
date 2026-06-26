@@ -41,3 +41,31 @@ export function formatAppleMusicConnectError(err) {
   }
   return "Apple Music connect failed — allow popups, confirm Apple Music subscription, try incognito";
 }
+
+/** User-facing hint when Spotify login / connect / playback fails. */
+export function formatSpotifyConnectError(err) {
+  const msg = extractErrorMessage(err);
+
+  if (/not registered for this application/i.test(msg)) {
+    return "This Spotify account isn't allowlisted — add it in the Spotify Developer Dashboard (User Management), or set the app to public";
+  }
+  if (/Spotify app not detected|No Spotify device found/i.test(msg)) {
+    return "Open the Spotify app, play any song for a few seconds, return to Hit4Hit and tap Connect player again";
+  }
+  if (/Premium|account_error|subscription/i.test(msg)) {
+    return "Spotify Premium is required for playback in the browser";
+  }
+  if (/No Spotify device found|open the Spotify app/i.test(msg)) {
+    return msg;
+  }
+  if (/not loaded|still loading/i.test(msg)) {
+    return "Spotify player still loading — wait a moment and tap Connect player again";
+  }
+  if (/not connected|Connect player/i.test(msg)) {
+    return msg;
+  }
+  if (msg && msg.length <= 140 && !/^\[object Object\]/i.test(msg)) {
+    return msg;
+  }
+  return "Spotify connect failed — open the Spotify app and try again";
+}

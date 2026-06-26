@@ -24,6 +24,7 @@ import {
   logClientError,
   GENERIC_USER_ERROR,
   formatAppleMusicConnectError,
+  formatSpotifyConnectError,
 } from "./utils/userError.js";
 import { extractErrorMessage } from "./musickit/musickitErrors.js";
 import {
@@ -1263,9 +1264,9 @@ export default function HitForHit() {
           } catch (e) {
             logClientError("Spotify player connect failed:", e);
             showToast(
-              extractErrorMessage(e) ||
+              formatSpotifyConnectError(e) ||
                 "Couldn't connect Spotify — open the Spotify app and tap again",
-              4500
+              5000
             );
             setHostAwaitingTap(true);
             return;
@@ -1680,6 +1681,7 @@ export default function HitForHit() {
                       type="button"
                       className="btn-ghost"
                       style={{ padding: "4px 10px", fontSize: 11 }}
+                      disabled={!spotify.sdkLoaded}
                       onClick={() => {
                         spotify
                           .connectPlayerFromUserGesture()
@@ -1687,14 +1689,14 @@ export default function HitForHit() {
                           .catch((e) => {
                             logClientError("Spotify connect failed:", e);
                             showToast(
-                              extractErrorMessage(e) ||
+                              formatSpotifyConnectError(e) ||
                                 "Couldn't connect — open Spotify app first",
                               5000
                             );
                           });
                       }}
                     >
-                      Connect player
+                      {spotify.sdkLoaded ? "Connect player" : "Loading Spotify…"}
                     </button>
                   )}
                   <button
@@ -1970,7 +1972,7 @@ export default function HitForHit() {
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
                 <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
                   {spotify.playerStatus ||
-                    "Tap Connect player above. On iPhone, open the Spotify app first (Premium required)."}
+                    "Tap Connect player. On iPhone: open Spotify, play a song briefly, then return here."}
                 </div>
               </div>
             )}

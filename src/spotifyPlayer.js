@@ -1,18 +1,44 @@
 export function loadSpotifySdk() {
-  if (window.Spotify) return Promise.resolve();
+  if (window.Spotify?.Player) return Promise.resolve();
   if (window.__spotify_sdk_loading) return window.__spotify_sdk_loading;
 
   window.__spotify_sdk_loading = new Promise((resolve, reject) => {
+    const done = () => {
+      if (window.Spotify?.Player) resolve();
+      else reject(new Error("Spotify SDK loaded but Player is missing"));
+    };
+
+    const timeout = setTimeout(() => {
+      reject(new Error("Spotify SDK load timed out"));
+    }, 20_000);
+
+    const finish = () => {
+      clearTimeout(timeout);
+      done();
+    };
+
+    window.onSpotifyWebPlaybackSDKReady = () => {
+      finish();
+    };
+
+    if (window.Spotify?.Player) {
+      finish();
+      return;
+    }
+
     const existing = document.getElementById("spotify-player-sdk");
     if (existing) {
-      if (window.Spotify) {
-        resolve();
+      if (window.Spotify?.Player) {
+        finish();
         return;
       }
-      existing.addEventListener("load", () => resolve());
-      existing.addEventListener("error", () =>
-        reject(new Error("Spotify SDK load error"))
-      );
+      existing.addEventListener("load", () => {
+        if (window.Spotify?.Player) finish();
+      });
+      existing.addEventListener("error", () => {
+        clearTimeout(timeout);
+        reject(new Error("Spotify SDK load error"));
+      });
       return;
     }
 
@@ -20,8 +46,13 @@ export function loadSpotifySdk() {
     script.id = "spotify-player-sdk";
     script.src = "https://sdk.scdn.co/spotify-player.js";
     script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Failed to load Spotify SDK"));
+    script.onload = () => {
+      if (window.Spotify?.Player) finish();
+    };
+    script.onerror = () => {
+      clearTimeout(timeout);
+      reject(new Error("Failed to load Spotify SDK"));
+    };
     document.body.appendChild(script);
   });
 
@@ -120,22 +151,49 @@ export async function listSpotifyDevices(accessToken) {
   return data?.devices ?? [];
 }
 
-export async function pickExternalSpotifyDevice(accessToken) {
-  let devices = [];
-  try {
-    devices = await listSpotifyDevices(accessToken);
-  } catch (e) {
-    const msg = String(e?.message || e);
-    if (/Spotify API 401|403/.test(msg)) throw e;
-    return null;
+export async function pickExternalSpotifyDevice(accessToken, options = {}) {
+  const retries = options.retries ?? 6;
+  const delayMs = options.delayMs ?? 900;
+
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    let devices = [];
+    try {
+      devices = await listSpotifyDevices(accessToken);
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (/Spotify API 401|403/.test(msg)) throw e;
+      return null;
+    }
+
+    if (devices.length) {
+      return (
+        devices.find((d) => d.is_active) ||
+        devices.find((d) => d.type === "Smartphone") ||
+        devices.find((d) => d.type === "Computer") ||
+        devices[0]
+      );
+    }
+
+    if (attempt < retries - 1) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
   }
-  if (!devices.length) return null;
-  return (
-    devices.find((d) => d.is_active) ||
-    devices.find((d) => d.type === "Smartphone") ||
-    devices.find((d) => d.type === "Computer") ||
-    devices[0]
-  );
+
+  return null;
+}
+
+/** Nudge the Spotify app on mobile — does not leave the page. */
+export function nudgeSpotifyApp() {
+  if (typeof window === "undefined" || !isMobileSpotifyClient()) return;
+  try {
+    const iframe = document.createElement("iframe");
+    iframe.style.display = "none";
+    iframe.src = "spotify:";
+    document.body.appendChild(iframe);
+    setTimeout(() => iframe.remove(), 500);
+  } catch {
+    /* ignore */
+  }
 }
 
 export function isMobileSpotifyClient() {
