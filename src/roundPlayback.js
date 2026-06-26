@@ -73,14 +73,14 @@ async function tryPlayPreview(trackMeta, limitSec = 30, primedAudio = null) {
 
   try {
     if (primedAudio) {
-      if (!isPreviewActivelyPlaying(primedAudio)) {
-        await waitForPreviewStart(primedAudio);
-      }
       if (isPreviewActivelyPlaying(primedAudio)) {
         playRoundTrack.activeAudio = primedAudio;
         return { type: "preview", audio: primedAudio };
       }
       try {
+        if (primedAudio.currentTime > 0.05) {
+          primedAudio.currentTime = 0;
+        }
         await primedAudio.play();
         await waitForPreviewStart(primedAudio, 2500);
         if (isPreviewActivelyPlaying(primedAudio)) {

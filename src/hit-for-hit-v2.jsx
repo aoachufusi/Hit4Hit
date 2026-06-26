@@ -76,6 +76,7 @@ import {
   playAppleMusicFromUserGesture,
   clearPreparedAppleQueue,
   isMobileLikeDevice,
+  isIOSSafari,
   preparePreviewAudio,
   playPreviewFromUserGesture,
   playPreparedPreviewFromUserGesture,
@@ -1195,31 +1196,24 @@ export default function HitForHit() {
     const resolvedNow = hostPlaybackResolvedRef.current;
     const hasPreview = Boolean(resolvedNow?.preview);
     const appleWantsFull = usesAppleMusic && appleMusicConnected;
+    // iOS Safari blocks async audio resume — full Apple Music web playback is unreliable.
+    const mobileSafariPreview = isIOSSafari() && hasPreview && appleWantsFull;
 
     unlockPreviewAudio();
 
-    // Full track needs the tap gesture on Apple Music — start that first, not preview.
-    const gestureMusic = appleWantsFull ? playAppleMusicFromUserGesture() : null;
+    const gestureMusic =
+      appleWantsFull && !mobileSafariPreview
+        ? playAppleMusicFromUserGesture()
+        : null;
 
-    let primedPreview = null;
-    if (hasPreview) {
-      if (appleWantsFull) {
-        // Same tap: unlock preview so fallback can resume if full track fails (iOS).
-        primedPreview = playPreviewFromUserGesture(resolvedNow.preview);
-        if (primedPreview) {
-          try {
-            primedPreview.pause();
-          } catch {
-            /* ignore */
-          }
-        }
-      } else {
-        primedPreview = playPreviewFromUserGesture(resolvedNow.preview);
-      }
-    }
+    const primedPreview =
+      hasPreview && (!appleWantsFull || mobileSafariPreview)
+        ? playPreviewFromUserGesture(resolvedNow.preview)
+        : null;
 
-    const preferGesturePreview = !appleWantsFull && Boolean(primedPreview) && hasPreview;
-    const preferFullTrack = appleWantsFull
+    const preferGesturePreview =
+      Boolean(primedPreview) && hasPreview && (!appleWantsFull || mobileSafariPreview);
+    const preferFullTrack = appleWantsFull && !mobileSafariPreview
       ? true
       : Boolean(spotify.loggedIn && spotify.deviceId);
 
@@ -1318,9 +1312,11 @@ export default function HitForHit() {
         setHostAwaitingTap(false);
         if (result.type === "preview") {
           showToast(
-            appleWantsFull
-              ? "Playing 30s preview — full track unavailable"
-              : "Playing 30s preview",
+            mobileSafariPreview
+              ? "Playing 30s preview on iPhone"
+              : appleWantsFull
+                ? "Playing 30s preview — full track unavailable"
+                : "Playing 30s preview",
             4000
           );
         } else if (result.type === "apple-music") {
@@ -1407,8 +1403,13 @@ export default function HitForHit() {
           : false;
 
         let applePrepared =
-          !usesAppleMusic || !appleMusicConnected || !resolved?.uri;
-        if (usesAppleMusic && appleMusicConnected && resolved?.uri) {
+          !usesAppleMusic || !appleMusicConnected || !resolved?.uri || isIOSSafari();
+        if (
+          usesAppleMusic &&
+          appleMusicConnected &&
+          resolved?.uri &&
+          !isIOSSafari()
+        ) {
           applePrepared = await prepareAppleMusicQueue(resolved.uri);
         }
 

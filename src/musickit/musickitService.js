@@ -344,6 +344,17 @@ export function isMobileLikeDevice() {
   );
 }
 
+/** iOS Safari — strict autoplay; MusicKit full playback is unreliable in mobile web. */
+export function isIOSSafari() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  const iOS =
+    /iPhone|iPad|iPod/i.test(ua) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/i.test(ua));
+  if (!iOS || !/WebKit/i.test(ua)) return false;
+  return !/CriOS|FxiOS|EdgiOS|OPiOS/i.test(ua);
+}
+
 /** iOS needs playsinline on MusicKit's injected audio element. */
 export function patchMusicKitAudioForMobile() {
   if (typeof document === "undefined") return;
