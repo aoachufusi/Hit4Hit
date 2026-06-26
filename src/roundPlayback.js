@@ -7,6 +7,7 @@ import {
   stopAppleMusicPlayback,
   resetAppleMusicPlayback,
   unlockPreviewAudio,
+  isPreviewActivelyPlaying,
 } from "./musickit/musickitService.js";
 
 export function extractSongTitle(label) {
@@ -50,10 +51,44 @@ export async function resolveTrackForPlayback(meta, label, artist, deps) {
 
 async function tryPlayPreview(trackMeta, limitSec = 30, primedAudio = null) {
   if (!trackMeta?.preview && !primedAudio) return null;
+
+  const waitForPreviewStart = (audio, timeoutMs = 4000) =>
+    new Promise((resolve) => {
+      if (isPreviewActivelyPlaying(audio)) {
+        resolve(true);
+        return;
+      }
+      const done = (ok) => {
+        clearTimeout(timer);
+        audio.removeEventListener("playing", onPlaying);
+        audio.removeEventListener("canplay", onPlaying);
+        resolve(ok);
+      };
+      const onPlaying = () => done(isPreviewActivelyPlaying(audio));
+      audio.addEventListener("playing", onPlaying, { once: true });
+      audio.addEventListener("canplay", onPlaying, { once: true });
+      const timer = setTimeout(() => done(isPreviewActivelyPlaying(audio)), timeoutMs);
+    });
+
   try {
     if (primedAudio) {
-      playRoundTrack.activeAudio = primedAudio;
-      return { type: "preview", audio: primedAudio };
+      if (!isPreviewActivelyPlaying(primedAudio)) {
+        await waitForPreviewStart(primedAudio);
+      }
+      if (isPreviewActivelyPlaying(primedAudio)) {
+        playRoundTrack.activeAudio = primedAudio;
+        return { type: "preview", audio: primedAudio };
+      }
+      try {
+        await primedAudio.play();
+        await waitForPreviewStart(primedAudio, 2500);
+        if (isPreviewActivelyPlaying(primedAudio)) {
+          playRoundTrack.activeAudio = primedAudio;
+          return { type: "preview", audio: primedAudio };
+        }
+      } catch {
+        /* fall through to reload */
+      }
     }
     if (!trackMeta?.preview) return null;
     unlockPreviewAudio();
@@ -117,7 +152,7 @@ export async function playRoundTrack(
     activeProvider,
     appleGestureMusic = null,
     primedPreviewAudio = null,
-    mobilePreferPreview = false,
+    preferGesturePreview = false,
   } = {}
 ) {
   const keepPlaying = Boolean(appleGestureMusic || primedPreviewAudio);
@@ -141,7 +176,7 @@ export async function playRoundTrack(
     ? { ...trackMeta, provider: trackMeta.provider ?? activeProvider }
     : null;
 
-  if (mobilePreferPreview && primedPreviewAudio) {
+  if (preferGesturePreview && primedPreviewAudio) {
     if (appleGestureMusic) {
       try {
         appleGestureMusic.stop?.();
@@ -149,7 +184,14 @@ export async function playRoundTrack(
         /* ignore */
       }
     }
-    return await tryPlayPreview(meta, previewLimitSec, primedPreviewAudio);
+    const preview = await tryPlayPreview(
+      meta,
+      previewLimitSec,
+      primedPreviewAudio
+    );
+    if (preview?.type === "preview" || preview?.type === "autoplay-blocked") {
+      return preview;
+    }
   }
 
   const tryFull = async () => {

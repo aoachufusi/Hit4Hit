@@ -318,8 +318,10 @@ export {
   stopPreview,
   unlockPreviewAudio,
   preparePreviewAudio,
+  playPreviewFromUserGesture,
   playPreparedPreviewFromUserGesture,
   isPreviewPrepared,
+  isPreviewActivelyPlaying,
   clearPreparedPreview,
   primePreviewFromUserGesture,
 } from "../previewAudio.js";
@@ -484,7 +486,7 @@ export async function playAppleMusicTrack(catalogSongId, { gestureMusic = null }
     }
     patchMusicKitAudioForMobile();
     const audible = await verifyAppleMusicAudible(gestureMusic);
-    if (!audible && isMobileLikeDevice()) {
+    if (!audible) {
       throw new Error("Apple Music playing silently — using preview instead");
     }
     return gestureMusic;

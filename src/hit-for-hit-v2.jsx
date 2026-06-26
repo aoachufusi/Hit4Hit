@@ -77,8 +77,10 @@ import {
   clearPreparedAppleQueue,
   isMobileLikeDevice,
   preparePreviewAudio,
+  playPreviewFromUserGesture,
   playPreparedPreviewFromUserGesture,
   clearPreparedPreview,
+  isPreviewActivelyPlaying,
 } from "./musickit/musickitService.js";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
@@ -1190,25 +1192,26 @@ export default function HitForHit() {
       return;
     }
 
-    const isMobile = isMobileLikeDevice();
     const resolvedNow = hostPlaybackResolvedRef.current;
+    const hasPreview = Boolean(resolvedNow?.preview);
 
-    // Unlock audio in the same turn as the tap (required on iOS).
     unlockPreviewAudio();
 
-    const primedPreview =
-      resolvedNow?.preview
-        ? playPreparedPreviewFromUserGesture(resolvedNow.preview)
-        : null;
+    const primedPreview = hasPreview
+      ? playPreviewFromUserGesture(resolvedNow.preview)
+      : null;
+    const previewPlaying =
+      Boolean(primedPreview) &&
+      (isPreviewActivelyPlaying(primedPreview) || hasPreview);
 
     const gestureMusic =
-      usesAppleMusic && appleMusicConnected && !primedPreview
+      usesAppleMusic && appleMusicConnected && !previewPlaying
         ? playAppleMusicFromUserGesture()
         : null;
 
-    const mobilePreferPreview = isMobile && Boolean(primedPreview);
+    const preferGesturePreview = Boolean(primedPreview) && hasPreview;
     const preferFullTrack = usesAppleMusic
-      ? appleMusicConnected && !mobilePreferPreview
+      ? appleMusicConnected && !hasPreview
       : Boolean(spotify.loggedIn && spotify.deviceId);
 
     const epoch = ++playbackEpochRef.current;
@@ -1254,7 +1257,7 @@ export default function HitForHit() {
           activeProvider: activeMusicProvider,
           appleGestureMusic: gestureMusic,
           primedPreviewAudio: primedPreview,
-          mobilePreferPreview,
+          preferGesturePreview,
         });
         if (playbackEpochRef.current !== epoch) return;
 
@@ -1285,10 +1288,10 @@ export default function HitForHit() {
           if (usesAppleMusic) {
             if (!appleMusicConnected) {
               showToast("Couldn't play — tap Connect Apple Music first");
-            } else if (!resolved?.uri) {
+            } else if (!resolved?.preview) {
               showToast("Couldn't play — pick each song from search results");
             } else {
-              showToast("Couldn't play — try Connect again or pick another track");
+              showToast("Couldn't play audio — raise volume, turn off silent mode, tap again");
             }
           } else if (!spotify.loggedIn) {
             showToast("Couldn't play — log in to Spotify");
@@ -1303,12 +1306,7 @@ export default function HitForHit() {
 
         setHostAwaitingTap(false);
         if (result.type === "preview") {
-          showToast(
-            mobilePreferPreview
-              ? "Playing 30s preview"
-              : "Playing 30s preview — full track unavailable on this device",
-            4000
-          );
+          showToast("Playing 30s preview", 4000);
         } else if (result.type === "apple-music") {
           showToast("Playing full track — keep volume up, silent mode off", 3000);
         } else if (result.type === "spotify") {

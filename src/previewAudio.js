@@ -11,14 +11,21 @@ const DEFAULT_LIMIT_SEC = 30;
 
 function applyMobileAudioAttrs(audio) {
   audio.preload = "auto";
-  audio.volume = 0.85;
+  audio.volume = 1;
+  audio.muted = false;
   audio.setAttribute("playsinline", "true");
   audio.setAttribute("webkit-playsinline", "true");
   try {
     audio.playsInline = true;
+    audio.crossOrigin = "anonymous";
   } catch {
     /* ignore */
   }
+}
+
+export function isPreviewActivelyPlaying(audio) {
+  if (!audio || audio.paused || audio.ended || audio.error) return false;
+  return audio.readyState >= 2 || audio.currentTime > 0.01;
 }
 
 function attachPreviewLimitTimer(audio, songId, limitSec = DEFAULT_LIMIT_SEC) {
@@ -136,7 +143,7 @@ export async function preparePreviewAudio(previewUrl) {
     return false;
   }
 
-  return audio.readyState >= 1;
+  return audio.readyState >= 2 && !audio.error;
 }
 
 export function isPreviewPrepared(previewUrl) {
@@ -145,21 +152,33 @@ export function isPreviewPrepared(previewUrl) {
     Boolean(url) &&
     preparedPreviewUrl === url &&
     Boolean(audioRef) &&
-    audioRef.readyState >= 1 &&
+    audioRef.readyState >= 2 &&
     !audioRef.error
   );
 }
 
-/** Start a pre-loaded preview synchronously inside a tap/click handler (iOS). */
-export function playPreparedPreviewFromUserGesture(previewUrl, limitSec = DEFAULT_LIMIT_SEC) {
+/** Start preview synchronously inside a tap/click handler (iOS). */
+export function playPreviewFromUserGesture(previewUrl, limitSec = DEFAULT_LIMIT_SEC) {
   const url = String(previewUrl || "").trim();
   if (!url || typeof window === "undefined") return null;
 
   unlockPreviewAudio();
 
   if (!isPreviewPrepared(url)) {
-    console.warn("Preview not prepared for gesture play", url);
-    return null;
+    if (audioRef) {
+      try {
+        audioRef.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+    const audio = new Audio();
+    applyMobileAudioAttrs(audio);
+    audio.src = url;
+    preparedPreviewUrl = url;
+    currentSongIdRef = url;
+    audioRef = audio;
+    audio.load();
   }
 
   try {
@@ -168,18 +187,24 @@ export function playPreparedPreviewFromUserGesture(previewUrl, limitSec = DEFAUL
       audioRef.currentTime = 0;
     }
     currentSongIdRef = url;
-    audioRef.play();
+    const playPromise = audioRef.play();
+    if (playPromise?.catch) {
+      playPromise.catch((e) => console.warn("Preview play rejected", e));
+    }
     attachPreviewLimitTimer(audioRef, url, limitSec);
     return audioRef;
   } catch (e) {
-    console.warn("Prepared preview gesture play failed", e);
+    console.warn("Preview gesture play failed", e);
     return null;
   }
 }
 
-/** @deprecated Prefer preparePreviewAudio + playPreparedPreviewFromUserGesture on mobile. */
+export function playPreparedPreviewFromUserGesture(previewUrl, limitSec) {
+  return playPreviewFromUserGesture(previewUrl, limitSec);
+}
+
 export function primePreviewFromUserGesture(previewUrl) {
-  return playPreparedPreviewFromUserGesture(previewUrl);
+  return playPreviewFromUserGesture(previewUrl);
 }
 
 export function clearPreparedPreview() {
