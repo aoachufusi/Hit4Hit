@@ -26,34 +26,54 @@ export function loadSpotifySdk() {
 
 export async function createSpotifyPlayer(getAccessToken) {
   await loadSpotifySdk();
+  return createSpotifyPlayerSync(getAccessToken);
+}
+
+/** Must run synchronously from a click/tap — Safari blocks player creation after await. */
+export function createSpotifyPlayerSync(getAccessToken) {
+  if (!window.Spotify?.Player) {
+    return Promise.reject(new Error("Spotify SDK not loaded yet"));
+  }
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("Spotify player connection timed out"));
+    }, 20_000);
+
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      fn(value);
+    };
+
     const player = new window.Spotify.Player({
       name: "Hit 4 Hit",
       getOAuthToken: (cb) => {
         Promise.resolve(getAccessToken())
           .then((token) => cb(token))
-          .catch(reject);
+          .catch((err) => finish(reject, err));
       },
       volume: 0.85,
     });
 
     player.addListener("initialization_error", ({ message }) =>
-      reject(new Error(message))
+      finish(reject, new Error(message))
     );
     player.addListener("authentication_error", ({ message }) =>
-      reject(new Error(message))
+      finish(reject, new Error(message))
     );
     player.addListener("account_error", ({ message }) =>
-      reject(new Error(message))
-    );
-    player.addListener("playback_error", ({ message }) =>
-      reject(new Error(message))
+      finish(reject, new Error(message))
     );
 
     player.addListener("ready", ({ device_id }) =>
-      resolve({ player, device_id })
+      finish(resolve, { player, device_id })
     );
+
     player.connect();
   });
 }
@@ -79,10 +99,32 @@ export async function spotifyApi(path, accessToken, options = {}) {
 }
 
 export async function transferPlaybackToDevice(accessToken, deviceId) {
-  await spotifyApi("/me/player", accessToken, {
-    method: "PUT",
-    body: JSON.stringify({ device_ids: [deviceId], play: false }),
-  });
+  try {
+    await spotifyApi("/me/player", accessToken, {
+      method: "PUT",
+      body: JSON.stringify({ device_ids: [deviceId], play: false }),
+    });
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (/Spotify API 404|NO_ACTIVE_DEVICE|Not found/i.test(msg)) return;
+    throw e;
+  }
+}
+
+export async function listSpotifyDevices(accessToken) {
+  const data = await spotifyApi("/me/player/devices", accessToken);
+  return data?.devices ?? [];
+}
+
+export async function pickExternalSpotifyDevice(accessToken) {
+  const devices = await listSpotifyDevices(accessToken);
+  if (!devices.length) return null;
+  return (
+    devices.find((d) => d.is_active) ||
+    devices.find((d) => d.type === "Smartphone") ||
+    devices.find((d) => d.type === "Computer") ||
+    devices[0]
+  );
 }
 
 export async function playTrackUris(accessToken, deviceId, uris) {

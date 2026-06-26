@@ -836,7 +836,7 @@ export default function HitForHit() {
     const usesSpotify =
       normalizeMusicProvider(gs?.musicProvider ?? musicProvider) !== MUSIC_PROVIDERS.APPLE;
     const pauseSpotify =
-      usesSpotify && spotify.loggedIn && spotify.deviceId
+      usesSpotify && spotify.loggedIn && spotify.playbackReady
         ? () => spotify.pausePlayback()
         : undefined;
     await stopRoundPlayback({ pauseSpotify, resetApple: next >= 2 });
@@ -866,7 +866,7 @@ export default function HitForHit() {
     const usesSpotify =
       normalizeMusicProvider(gs?.musicProvider ?? musicProvider) !== MUSIC_PROVIDERS.APPLE;
     const pauseSpotify =
-      usesSpotify && spotify.loggedIn && spotify.deviceId
+      usesSpotify && spotify.loggedIn && spotify.playbackReady
         ? () => spotify.pausePlayback()
         : undefined;
     try {
@@ -1180,7 +1180,7 @@ export default function HitForHit() {
   const [playbackPreparing, setPlaybackPreparing] = useState(false);
 
   const roundPauseSpotify = useCallback(async () => {
-    if (usesAppleMusic || !spotify.loggedIn || !spotify.deviceId) return;
+    if (usesAppleMusic || !spotify.loggedIn || !spotify.playbackReady) return;
     await spotify.pausePlayback();
   }, [usesAppleMusic, spotify]);
 
@@ -1213,9 +1213,11 @@ export default function HitForHit() {
 
     const preferGesturePreview =
       Boolean(primedPreview) && hasPreview && (!appleWantsFull || mobileSafariPreview);
-    const preferFullTrack = appleWantsFull && !mobileSafariPreview
-      ? true
-      : Boolean(spotify.loggedIn && spotify.deviceId);
+
+    let spotifyConnectPromise = null;
+    if (!usesAppleMusic && spotify.loggedIn && !spotify.playbackReady) {
+      spotifyConnectPromise = spotify.connectPlayerFromUserGesture();
+    }
 
     const epoch = ++playbackEpochRef.current;
     const pauseSpotify = usesAppleMusic ? undefined : roundPauseSpotify;
@@ -1250,11 +1252,30 @@ export default function HitForHit() {
           }
         }
 
+        let spotifyReady =
+          !usesAppleMusic && spotify.loggedIn && spotify.playbackReady;
+
+        if (spotifyConnectPromise) {
+          try {
+            await spotifyConnectPromise;
+            spotifyReady = true;
+          } catch (e) {
+            logClientError("Spotify player connect failed:", e);
+            showToast(
+              extractErrorMessage(e) ||
+                "Couldn't connect Spotify — open the Spotify app and tap again",
+              4500
+            );
+            setHostAwaitingTap(true);
+            return;
+          }
+        }
+
+        const preferFullTrack =
+          appleWantsFull && !mobileSafariPreview ? true : spotifyReady;
+
         const result = await playRoundTrack(resolved, {
-          playSpotifyUri:
-            !usesAppleMusic && spotify.loggedIn && spotify.deviceId
-              ? spotify.playUri
-              : null,
+          playSpotifyUri: spotifyReady ? spotify.playUri : null,
           pauseSpotify,
           preferFullTrack,
           activeProvider: activeMusicProvider,
@@ -1300,8 +1321,11 @@ export default function HitForHit() {
             }
           } else if (!spotify.loggedIn) {
             showToast("Couldn't play — log in to Spotify");
-          } else if (!spotify.deviceId) {
-            showToast("Couldn't play — wait for Spotify player to connect");
+          } else if (!spotify.playbackReady) {
+            showToast(
+              "Couldn't play — tap Connect player above, then tap ▶ again",
+              4500
+            );
           } else {
             showToast("Couldn't play this song — pick a track from search results");
           }
@@ -1322,7 +1346,12 @@ export default function HitForHit() {
         } else if (result.type === "apple-music") {
           showToast("Playing full track — keep volume up, silent mode off", 3000);
         } else if (result.type === "spotify") {
-          showToast("Playing via Spotify", 2500);
+          showToast(
+            spotify.deviceType === "external"
+              ? "Playing via Spotify app"
+              : "Playing via Spotify",
+            2500
+          );
         }
         playbackCleanupRef.current = waitForPlaybackEnd(result, () => {
           if (playbackEpochRef.current === epoch) {
@@ -1350,6 +1379,7 @@ export default function HitForHit() {
     roundPauseSpotify,
     advancePlayback,
     showToast,
+    spotify,
   ]);
 
   useEffect(() => {
@@ -1631,7 +1661,36 @@ export default function HitForHit() {
             ) : canManageSpotify ? (
               spotify.loggedIn ? (
                 <>
-                  <span className="bf" style={{fontSize:10,color:MUTED1}}>{musicLabel}</span>
+                  <span className="bf" style={{fontSize:10,color:MUTED1}}>
+                    {musicLabel}
+                    {spotify.playbackReady
+                      ? spotify.deviceType === "external"
+                        ? " · app"
+                        : " ✓"
+                      : ""}
+                  </span>
+                  {!spotify.playbackReady && (
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      style={{ padding: "4px 10px", fontSize: 11 }}
+                      disabled={!spotify.sdkLoaded}
+                      onClick={() => {
+                        spotify
+                          .connectPlayerFromUserGesture()
+                          .catch((e) => {
+                            logClientError("Spotify connect failed:", e);
+                            showToast(
+                              extractErrorMessage(e) ||
+                                "Couldn't connect Spotify player",
+                              4000
+                            );
+                          });
+                      }}
+                    >
+                      {spotify.sdkLoaded ? "Connect player" : "Loading…"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn-ghost"
@@ -1897,6 +1956,15 @@ export default function HitForHit() {
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
                 <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
                   Log in with Spotify above for song playback on your device.
+                </div>
+              </div>
+            )}
+
+            {isHost && !usesAppleMusic && spotify.loggedIn && !spotify.playbackReady && (
+              <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
+                <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
+                  {spotify.playerStatus ||
+                    "Tap Connect player above to enable Spotify playback. On iPhone, you may need the Spotify app open."}
                 </div>
               </div>
             )}
