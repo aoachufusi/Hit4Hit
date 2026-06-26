@@ -5,6 +5,9 @@ import { withTimeout } from "./promiseUtils.js";
 
 const auth = app ? getAuth(app) : null;
 
+/** Path allowed by rules (`games/$code`) — used for connectivity probes only. */
+export const DB_PROBE_PATH = "games/_hit4hit_probe";
+
 export function databaseBaseUrl() {
   const url = String(import.meta.env.VITE_FIREBASE_DATABASE_URL || "").replace(
     /\/$/,
@@ -39,13 +42,13 @@ export async function restPingHost(timeoutMs = 6000) {
   }
 }
 
-/** Authenticated read probe — .info/* is SDK-only, so use games/. */
+/** Authenticated read probe — rules allow games/$code, not the games root. */
 export async function restProbeRead(timeoutMs = 10_000) {
   if (!isFirebaseConfigured) {
     throw new Error("Firebase is not configured");
   }
   const token = await restAuthParam();
-  const url = restUrl("games", token, "shallow=true");
+  const url = restUrl(DB_PROBE_PATH, token);
   const res = await withTimeout(fetch(url), timeoutMs, "REST_PROBE");
   if (res.status === 401 || res.status === 403) {
     throw new Error("Permission denied — enable Anonymous auth in Firebase");

@@ -1,6 +1,6 @@
 import { ref, onValue, get, goOnline } from "firebase/database";
 import { db } from "./config.js";
-import { restPingHost, restProbeRead } from "./restFallback.js";
+import { restPingHost, restProbeRead, DB_PROBE_PATH } from "./restFallback.js";
 
 /** Kick the RTDB client to reconnect (safe to call before waiting on .info/connected). */
 export function nudgeDatabaseOnline() {
@@ -16,7 +16,7 @@ async function probeSdkRead(timeoutMs = 8000) {
   if (!db) return false;
   try {
     await Promise.race([
-      get(ref(db, "games")),
+      get(ref(db, DB_PROBE_PATH)),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("SDK_READ_PROBE_TIMEOUT")), timeoutMs)
       ),

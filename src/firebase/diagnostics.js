@@ -8,7 +8,7 @@ import {
   probeDatabaseRest,
   probeDatabaseHost,
 } from "./dbConnection.js";
-import { databaseBaseUrl, restGet } from "./restFallback.js";
+import { databaseBaseUrl, restGet, DB_PROBE_PATH } from "./restFallback.js";
 import { isLikelyChrome } from "./browserUtils.js";
 
 function formatErr(err) {
@@ -141,18 +141,18 @@ export async function runFirebaseDiagnostics({ gameCode } = {}) {
     }
   } else if (dbMode === "rest") {
     try {
-      await restGet("games", 8_000);
+      await restGet(DB_PROBE_PATH, 8_000);
       push("database-read", "Database read", true, "Server reachable (REST)");
     } catch (err) {
       push("database-read", "Database read", false, formatErr(err));
     }
   } else {
     try {
-      await withTimeout(get(ref(db, "games")), 8_000, "READ_GAMES");
+      await withTimeout(get(ref(db, DB_PROBE_PATH)), 8_000, "READ_PROBE");
       push("database-read", "Database read", true, "Server reachable");
     } catch (sdkErr) {
       try {
-        await restGet("games", 8_000);
+        await restGet(DB_PROBE_PATH, 8_000);
         push("database-read", "Database read", true, "Server reachable (REST)");
       } catch (restErr) {
         push("database-read", "Database read", false, formatErr(restErr || sdkErr));
