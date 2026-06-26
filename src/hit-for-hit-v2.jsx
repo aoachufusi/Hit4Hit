@@ -65,6 +65,7 @@ import {
   stopRoundPlayback,
   waitForPlaybackEnd,
 } from "./roundPlayback.js";
+import { isDesktopSpotifyClient } from "./spotifyPlayer.js";
 import ArtistSearch from "./musickit/ArtistSearch.jsx";
 import MusicProviderPicker from "./musickit/MusicProviderPicker.jsx";
 import {
@@ -1264,7 +1265,7 @@ export default function HitForHit() {
           } catch (e) {
             logClientError("Spotify player connect failed:", e);
             showToast(
-              formatSpotifyConnectError(e) ||
+              formatSpotifyConnectError(e, { desktop: isDesktopSpotifyClient() }) ||
                 "Couldn't connect Spotify — open the Spotify app and tap again",
               5000
             );
@@ -1689,7 +1690,7 @@ export default function HitForHit() {
                           .catch((e) => {
                             logClientError("Spotify connect failed:", e);
                             showToast(
-                              formatSpotifyConnectError(e) ||
+                              formatSpotifyConnectError(e, { desktop: isDesktopSpotifyClient() }) ||
                                 "Couldn't connect — open Spotify app first",
                               5000
                             );

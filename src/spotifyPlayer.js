@@ -1,78 +1,86 @@
+import { getStoredSession } from "./spotifyAuth.js";
+
+const SDK_SRC = "https://sdk.scdn.co/spotify-player.js";
+let sdkReadyHookInstalled = false;
+
+function installSdkReadyHook() {
+  if (sdkReadyHookInstalled || typeof window === "undefined") return;
+  sdkReadyHookInstalled = true;
+  const prev = window.onSpotifyWebPlaybackSDKReady;
+  window.onSpotifyWebPlaybackSDKReady = () => {
+    prev?.();
+    window.__spotify_sdk_ready = true;
+  };
+  if (window.Spotify?.Player) {
+    window.__spotify_sdk_ready = true;
+  }
+}
+
+installSdkReadyHook();
+
+export function resetSpotifySdkLoad() {
+  if (typeof window === "undefined") return;
+  window.__spotify_sdk_loading = null;
+}
+
+function waitForSpotifyPlayer(timeoutMs = 25_000) {
+  return new Promise((resolve, reject) => {
+    if (window.Spotify?.Player) {
+      resolve();
+      return;
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    const tick = () => {
+      if (window.Spotify?.Player) {
+        clearInterval(timer);
+        resolve();
+      } else if (Date.now() >= deadline) {
+        clearInterval(timer);
+        reject(new Error("Spotify SDK load timed out"));
+      }
+    };
+    const timer = setInterval(tick, 100);
+    tick();
+  });
+}
+
 export function loadSpotifySdk() {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("Spotify SDK requires a browser"));
+  }
   if (window.Spotify?.Player) return Promise.resolve();
   if (window.__spotify_sdk_loading) return window.__spotify_sdk_loading;
 
-  window.__spotify_sdk_loading = new Promise((resolve, reject) => {
-    const done = () => {
-      if (window.Spotify?.Player) resolve();
-      else reject(new Error("Spotify SDK loaded but Player is missing"));
-    };
+  installSdkReadyHook();
 
-    const timeout = setTimeout(() => {
-      if (window.Spotify?.Player) finish();
-      else reject(new Error("Spotify SDK load timed out"));
-    }, 25_000);
-
-    const finish = () => {
-      clearTimeout(timeout);
-      done();
-    };
-
-    const prevReady = window.onSpotifyWebPlaybackSDKReady;
-    window.onSpotifyWebPlaybackSDKReady = () => {
-      prevReady?.();
-      finish();
-    };
-
-    if (window.Spotify?.Player) {
-      finish();
-      return;
-    }
-
-    const existing = document.querySelector(
-      'script[src*="spotify-player.js"], #spotify-player-sdk'
-    );
-    if (existing) {
-      if (window.Spotify?.Player) {
-        finish();
-        return;
+  window.__spotify_sdk_loading = waitForSpotifyPlayer()
+    .catch((err) => {
+      resetSpotifySdkLoad();
+      throw err;
+    })
+    .then(() => {
+      if (!window.Spotify?.Player) {
+        resetSpotifySdkLoad();
+        throw new Error("Spotify SDK loaded but Player is missing");
       }
-      existing.addEventListener("load", () => {
-        if (window.Spotify?.Player) finish();
-      });
-      existing.addEventListener("error", () => {
-        clearTimeout(timeout);
-        reject(new Error("Spotify SDK load error"));
-      });
-      return;
-    }
+    });
 
+  if (window.Spotify?.Player) {
+    return Promise.resolve();
+  }
+
+  const existing = document.querySelector(`script[src="${SDK_SRC}"]`);
+  if (!existing) {
     const script = document.createElement("script");
     script.id = "spotify-player-sdk";
-    script.src = "https://sdk.scdn.co/spotify-player.js";
+    script.src = SDK_SRC;
     script.async = true;
-    script.onload = () => {
-      if (window.Spotify?.Player) {
-        finish();
-        return;
-      }
-      let polls = 0;
-      const poll = setInterval(() => {
-        polls += 1;
-        if (window.Spotify?.Player) {
-          clearInterval(poll);
-          finish();
-        } else if (polls >= 50) {
-          clearInterval(poll);
-        }
-      }, 100);
-    };
     script.onerror = () => {
-      clearTimeout(timeout);
-      reject(new Error("Failed to load Spotify SDK"));
+      resetSpotifySdkLoad();
     };
-    document.body.appendChild(script);
-  });
+    document.head.appendChild(script);
+  }
 
   return window.__spotify_sdk_loading;
 }
@@ -84,24 +92,62 @@ export function normalizeSpotifyUri(uriOrId) {
   return `spotify:track:${s}`;
 }
 
-export async function createSpotifyPlayer(getAccessToken) {
-  await loadSpotifySdk();
-  return createSpotifyPlayerSync(getAccessToken);
+function cachedAccessToken() {
+  const s = getStoredSession();
+  if (!s?.access_token) return null;
+  const expiresAt = (s.obtained_at ?? 0) + (s.expires_in ?? 0) * 1000;
+  if (Date.now() >= expiresAt - 60_000) return null;
+  return s.access_token;
 }
 
-/** Must run synchronously from a click/tap — Safari blocks player creation after await. */
-export function createSpotifyPlayerSync(getAccessToken) {
+/** Fail fast with a clear message before the SDK hangs on a bad token. */
+export async function verifySpotifyAccessToken(accessToken) {
+  const res = await fetch("https://api.spotify.com/v1/me", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (res.ok) return true;
+  const text = await res.text();
+  throw new Error(`Spotify API ${res.status}: ${text}`);
+}
+
+function uniquePlayerName() {
+  const id =
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `Hit4Hit ${id}`;
+}
+
+export async function createSpotifyPlayer(getAccessToken) {
+  await loadSpotifySdk();
+  const token = await getAccessToken();
+  await verifySpotifyAccessToken(token);
+  return createSpotifyPlayerSync(getAccessToken, token);
+}
+
+/**
+ * @param {() => Promise<string>} getAccessToken
+ * @param {string | null} [prefetchedToken]
+ */
+export function createSpotifyPlayerSync(getAccessToken, prefetchedToken = null) {
   if (!window.Spotify?.Player) {
     return Promise.reject(new Error("Spotify SDK not loaded yet"));
   }
 
   return new Promise((resolve, reject) => {
     let settled = false;
+    let player = null;
+
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
+      try {
+        player?.disconnect?.();
+      } catch {
+        /* ignore */
+      }
       reject(new Error("Spotify player connection timed out"));
-    }, 20_000);
+    }, 45_000);
 
     const finish = (fn, value) => {
       if (settled) return;
@@ -110,24 +156,31 @@ export function createSpotifyPlayerSync(getAccessToken) {
       fn(value);
     };
 
-    const player = new window.Spotify.Player({
-      name: "Hit 4 Hit",
-      getOAuthToken: (cb) => {
-        Promise.resolve(getAccessToken())
-          .then((token) => cb(token))
-          .catch((err) => finish(reject, err));
-      },
+    const deliverToken = (cb) => {
+      const cached = prefetchedToken || cachedAccessToken();
+      if (cached) {
+        cb(cached);
+        return;
+      }
+      Promise.resolve(getAccessToken())
+        .then((token) => cb(token))
+        .catch((err) => finish(reject, err));
+    };
+
+    player = new window.Spotify.Player({
+      name: uniquePlayerName(),
+      getOAuthToken: deliverToken,
       volume: 0.85,
     });
 
     player.addListener("initialization_error", ({ message }) =>
-      finish(reject, new Error(message))
+      finish(reject, new Error(message || "Spotify initialization failed"))
     );
     player.addListener("authentication_error", ({ message }) =>
-      finish(reject, new Error(message))
+      finish(reject, new Error(message || "Spotify authentication failed"))
     );
     player.addListener("account_error", ({ message }) =>
-      finish(reject, new Error(message))
+      finish(reject, new Error(message || "Spotify account error — Premium required"))
     );
     player.addListener("playback_error", ({ message }) => {
       console.warn("Spotify playback_error", message);
@@ -137,7 +190,23 @@ export function createSpotifyPlayerSync(getAccessToken) {
       finish(resolve, { player, device_id })
     );
 
-    player.connect();
+    player.addListener("not_ready", ({ device_id }) => {
+      console.warn("Spotify player not_ready", device_id);
+    });
+
+    const connectResult = player.connect();
+    if (connectResult?.then) {
+      connectResult
+        .then((ok) => {
+          if (ok === false) {
+            finish(
+              reject,
+              new Error("Spotify denied browser player — log out and log in again")
+            );
+          }
+        })
+        .catch((err) => finish(reject, err));
+    }
   });
 }
 
@@ -210,9 +279,8 @@ export async function pickExternalSpotifyDevice(accessToken, options = {}) {
   return null;
 }
 
-/** Nudge the Spotify app on mobile — does not leave the page. */
 export function nudgeSpotifyApp() {
-  if (typeof window === "undefined" || !isMobileSpotifyClient()) return;
+  if (typeof window === "undefined" || !isSpotifyAppFallbackClient()) return;
   try {
     const iframe = document.createElement("iframe");
     iframe.style.display = "none";
@@ -224,28 +292,13 @@ export function nudgeSpotifyApp() {
   }
 }
 
-/** True phone/tablet — not Mac/Windows desktop Chrome (iPad desktop UA excluded). */
-export function isMobileSpotifyClient() {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent;
-  if (/Android|iPhone|iPod|iPad/i.test(ua)) return true;
-  return false;
-}
-
-/** iPad on iOS 13+ may report Macintosh — only treat as mobile when clearly touch-first. */
 export function isSpotifyAppFallbackClient() {
   if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent;
-  if (/Android|iPhone|iPod|iPad/i.test(ua)) return true;
-  if (
-    /Macintosh/i.test(ua) &&
-    navigator.maxTouchPoints > 1 &&
-    typeof window !== "undefined" &&
-    window.matchMedia?.("(hover: none)")?.matches
-  ) {
-    return true;
-  }
-  return false;
+  return /Android|iPhone|iPod|iPad/i.test(navigator.userAgent);
+}
+
+export function isDesktopSpotifyClient() {
+  return !isSpotifyAppFallbackClient();
 }
 
 export async function playTrackUris(accessToken, deviceId, uris) {

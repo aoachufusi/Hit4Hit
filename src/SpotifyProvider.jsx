@@ -15,9 +15,11 @@ import {
   setStoredSession,
 } from "./spotifyAuth.js";
 import {
-  createSpotifyPlayerSync,
+  createSpotifyPlayer,
+  isDesktopSpotifyClient,
   isSpotifyAppFallbackClient,
   loadSpotifySdk,
+  resetSpotifySdkLoad,
   nudgeSpotifyApp,
   pausePlayback as pauseSpotifyDevice,
   pickExternalSpotifyDevice,
@@ -49,6 +51,14 @@ export function SpotifyProvider({ children }) {
   const deviceIdRef = useRef(null);
   const deviceTypeRef = useRef(null);
   const connectPromiseRef = useRef(null);
+
+  useEffect(() => {
+    loadSpotifySdk()
+      .then(() => setSdkLoaded(true))
+      .catch((e) => {
+        logClientError("Spotify SDK preload failed:", e);
+      });
+  }, []);
 
   const setPlaybackDevice = useCallback((id, type) => {
     deviceIdRef.current = id;
@@ -205,8 +215,7 @@ export function SpotifyProvider({ children }) {
       }
       playerRef.current = null;
     }
-    const { player, device_id } = await createSpotifyPlayerSync(getAccessToken);
-    return finishWebPlayer({ player, device_id });
+    return createSpotifyPlayer(getAccessToken).then(finishWebPlayer);
   }, [getAccessToken, finishWebPlayer]);
 
   const connectWebPlayer = useCallback(async () => {
@@ -233,7 +242,8 @@ export function SpotifyProvider({ children }) {
     if (connectPromiseRef.current) return connectPromiseRef.current;
 
     setPlayerStatus("Connecting Spotify player…");
-    const useAppFallback = isSpotifyAppFallbackClient();
+    const desktop = isDesktopSpotifyClient();
+    const useAppFallback = !desktop && isSpotifyAppFallbackClient();
 
     let webPlayerPromise = null;
     if (useAppFallback && window.Spotify?.Player) {
@@ -241,12 +251,13 @@ export function SpotifyProvider({ children }) {
     }
 
     const run = async () => {
-      if (!useAppFallback) {
+      if (desktop) {
         try {
           return await connectWebPlayer();
         } catch (e) {
           logClientError("Spotify web player failed:", e);
-          const detail = formatSpotifyConnectError(e);
+          resetSpotifySdkLoad();
+          const detail = formatSpotifyConnectError(e, { desktop: true });
           setPlayerStatus(detail);
           throw e;
         }
@@ -273,7 +284,7 @@ export function SpotifyProvider({ children }) {
         return await connectExternalDevice();
       } catch (e) {
         logClientError("Spotify external device failed:", e);
-        const detail = formatSpotifyConnectError(e);
+        const detail = formatSpotifyConnectError(e, { desktop: false });
         setPlayerStatus(detail);
         throw e;
       }

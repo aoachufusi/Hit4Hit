@@ -43,38 +43,42 @@ export function formatAppleMusicConnectError(err) {
 }
 
 /** User-facing hint when Spotify login / connect / playback fails. */
-export function formatSpotifyConnectError(err) {
+export function formatSpotifyConnectError(err, { desktop = false } = {}) {
   const msg = extractErrorMessage(err);
 
   if (/not registered for this application/i.test(msg)) {
     return "This Spotify account isn't allowlisted — add it in the Spotify Developer Dashboard (User Management), or set the app to public";
   }
   if (/Spotify app not detected|No Spotify device found/i.test(msg)) {
-    return "Couldn't find the Spotify app — open it, play a song briefly, then tap Connect player (phone only)";
+    if (desktop) {
+      return "In-browser Spotify player failed — disable ad blockers, confirm Premium, then log out and log in again";
+    }
+    return "Couldn't find the Spotify app — open it, play a song briefly, then tap Connect player";
   }
   if (/Premium|account_error|subscription/i.test(msg)) {
     return "Spotify Premium is required for in-browser playback";
   }
   if (/initialization_error|Browser not supported|EME/i.test(msg)) {
-    return "This browser can't run Spotify's web player — try Chrome or host on desktop";
+    return "This browser can't run Spotify's web player — try Chrome and disable extensions";
   }
-  if (/authentication_error|Invalid token scopes/i.test(msg)) {
+  if (/authentication_error|Invalid token scopes|denied browser player/i.test(msg)) {
     return "Spotify login expired or missing permissions — log out and log in again";
   }
-  if (/timed out|connection timed out/i.test(msg)) {
-    return "Spotify player timed out — disable ad blockers, then tap Connect player again";
-  }
-  if (/No Spotify device found|open the Spotify app/i.test(msg)) {
-    return msg;
+  if (/timed out|connection timed out|SDK load timed out/i.test(msg)) {
+    return desktop
+      ? "Spotify player timed out — allow sdk.scdn.co in ad blockers, refresh, log out/in, try again"
+      : "Spotify player timed out — disable ad blockers, then tap Connect player again";
   }
   if (/not loaded|still loading/i.test(msg)) {
-    return "Spotify player still loading — wait a moment and tap Connect player again";
+    return "Spotify player still loading — refresh the page, then tap Connect player";
   }
   if (/not connected|Connect player/i.test(msg)) {
     return msg;
   }
-  if (msg && msg.length <= 140 && !/^\[object Object\]/i.test(msg)) {
+  if (msg && msg.length <= 160 && !/^\[object Object\]/i.test(msg)) {
     return msg;
   }
-  return "Spotify connect failed — log out, log in again, then tap Connect player";
+  return desktop
+    ? "Spotify connect failed — log out, log in again, then tap Connect player"
+    : "Spotify connect failed — try Connect player again";
 }
