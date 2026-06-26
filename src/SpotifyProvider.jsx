@@ -13,6 +13,7 @@ import {
   getStoredSession,
   refreshAccessToken,
   setStoredSession,
+  assertSpotifyStreamingScope,
 } from "./spotifyAuth.js";
 import {
   createSpotifyPlayer,
@@ -84,6 +85,7 @@ export function SpotifyProvider({ children }) {
       expires_in: refreshed.expires_in,
       obtained_at: Date.now(),
       refresh_token: refreshed.refresh_token ?? s.refresh_token,
+      scope: refreshed.scope ?? s.scope ?? "",
     };
     setStoredSession(next);
     setSession(next);
@@ -109,6 +111,7 @@ export function SpotifyProvider({ children }) {
           access_token: token.access_token,
           refresh_token: token.refresh_token,
           expires_in: token.expires_in,
+          scope: token.scope ?? "",
           obtained_at: Date.now(),
         };
         setStoredSession(next);
@@ -235,6 +238,15 @@ export function SpotifyProvider({ children }) {
   const connectPlayerFromUserGesture = useCallback(() => {
     if (!session?.access_token) {
       return Promise.reject(new Error("Not logged in to Spotify"));
+    }
+    try {
+      assertSpotifyStreamingScope(session);
+    } catch (e) {
+      const detail = formatSpotifyConnectError(e, {
+        desktop: isDesktopSpotifyClient(),
+      });
+      setPlayerStatus(detail);
+      return Promise.reject(e);
     }
     if (deviceIdRef.current) {
       return Promise.resolve(deviceIdRef.current);

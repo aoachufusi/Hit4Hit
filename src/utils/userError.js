@@ -55,18 +55,24 @@ export function formatSpotifyConnectError(err, { desktop = false } = {}) {
     }
     return "Couldn't find the Spotify app — open it, play a song briefly, then tap Connect player";
   }
-  if (/Premium|account_error|subscription/i.test(msg)) {
+  if (/Premium|account_error|subscription|current plan: free/i.test(msg)) {
     return "Spotify Premium is required for in-browser playback";
   }
-  if (/initialization_error|Browser not supported|EME/i.test(msg)) {
-    return "This browser can't run Spotify's web player — try Chrome and disable extensions";
+  if (/missing streaming permission|missing streaming|login needs an update/i.test(msg)) {
+    return "Spotify login missing streaming — log out, log in again, and approve all permissions";
+  }
+  if (/Protected content|DRM|initialization_error|EME|keysystem/i.test(msg)) {
+    return "Chrome blocked Spotify DRM — click the lock icon → Site settings → allow Protected content, then refresh";
   }
   if (/authentication_error|Invalid token scopes|denied browser player/i.test(msg)) {
     return "Spotify login expired or missing permissions — log out and log in again";
   }
   if (/timed out|connection timed out|SDK load timed out/i.test(msg)) {
+    if (/Protected content|DRM/i.test(msg)) {
+      return "Allow Protected content (DRM) for hit4hit.app in Chrome site settings, then refresh";
+    }
     return desktop
-      ? "Spotify player timed out — allow sdk.scdn.co in ad blockers, refresh, log out/in, try again"
+      ? "Spotify player timed out — allow Protected content (DRM) in Chrome site settings, disable ad blockers, log out/in"
       : "Spotify player timed out — disable ad blockers, then tap Connect player again";
   }
   if (/not loaded|still loading/i.test(msg)) {

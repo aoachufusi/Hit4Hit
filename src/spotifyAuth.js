@@ -78,6 +78,7 @@ export async function buildAuthorizeUrl() {
     code_challenge_method: "S256",
     code_challenge: codeChallenge,
     state,
+    show_dialog: "true",
   });
 
   return `https://accounts.spotify.com/authorize?${params.toString()}`;
@@ -155,4 +156,20 @@ export function setStoredSession(session) {
 
 export function clearStoredSession() {
   localStorage.removeItem(SESSION_KEY);
+}
+
+export function assertSpotifyStreamingScope(session = getStoredSession()) {
+  if (!session?.access_token) {
+    throw new Error("Not logged in to Spotify");
+  }
+  if (!session.scope) {
+    throw new Error(
+      "Spotify login needs an update — log out and log in again"
+    );
+  }
+  if (!/\bstreaming\b/.test(session.scope)) {
+    throw new Error(
+      "Spotify login missing streaming permission — log out and log in again"
+    );
+  }
 }

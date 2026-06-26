@@ -24,7 +24,7 @@
         },
         {
           "key": "Permissions-Policy",
-          "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+          "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), encrypted-media=(self), autoplay=(self)"
         },
         {
           "key": "X-DNS-Prefetch-Control",
