@@ -158,6 +158,8 @@ export async function playRoundTrack(
   const keepPlaying = Boolean(appleGestureMusic || primedPreviewAudio);
   if (keepPlaying) {
     await stopPreview(null, { keepAudioContext: true, keepPlaying: true });
+  } else if (preferFullTrack) {
+    await stopPreview(null, { keepAudioContext: true });
   } else {
     await stopPreview();
   }
@@ -210,7 +212,15 @@ export async function playRoundTrack(
 
   if (preferFullTrack) {
     const full = await tryFull();
-    if (full && full.type !== "error") return full;
+    if (full && full.type !== "error") {
+      if (full.type === "apple-music" || full.type === "spotify") {
+        await stopPreview(null, { keepAudioContext: true });
+        playRoundTrack.activeAudio = null;
+      }
+      return full;
+    }
+    stopAppleMusicPlayback();
+    playRoundTrack.activeMusic = null;
     const preview = await tryPlayPreview(meta, previewLimitSec, primedPreviewAudio);
     if (preview?.type === "autoplay-blocked") return preview;
     if (preview) return preview;

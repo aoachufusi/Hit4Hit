@@ -448,20 +448,18 @@ function domAudioIsAudible() {
   );
 }
 
-async function verifyAppleMusicAudible(music, timeoutMs = 2500) {
-  const startDom = domAudioIsAudible();
+async function verifyAppleMusicAudible(music, timeoutMs = 4000) {
   const startTime = music?.currentPlaybackTime ?? 0;
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    if (domAudioIsAudible() && !startDom) return true;
-    if (domAudioIsAudible() && startDom) return true;
     const now = music?.currentPlaybackTime ?? 0;
-    if (now > startTime + 0.35 && domAudioIsAudible()) return true;
+    if (now > startTime + 0.3) return true;
+    if (domAudioIsAudible()) return true;
     await new Promise((r) => setTimeout(r, 120));
   }
 
-  return domAudioIsAudible();
+  return (music?.currentPlaybackTime ?? 0) > startTime + 0.3 || domAudioIsAudible();
 }
 
 /** Full Apple Music playback (host must be authorized). */
@@ -487,7 +485,7 @@ export async function playAppleMusicTrack(catalogSongId, { gestureMusic = null }
     patchMusicKitAudioForMobile();
     const audible = await verifyAppleMusicAudible(gestureMusic);
     if (!audible) {
-      throw new Error("Apple Music playing silently — using preview instead");
+      throw new Error("Apple Music did not produce audio — falling back to preview");
     }
     return gestureMusic;
   }
@@ -547,6 +545,7 @@ export async function playAppleMusicTrack(catalogSongId, { gestureMusic = null }
       );
     }
 
+    patchMusicKitAudioForMobile();
     return music;
   };
 

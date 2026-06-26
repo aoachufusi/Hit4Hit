@@ -1194,24 +1194,21 @@ export default function HitForHit() {
 
     const resolvedNow = hostPlaybackResolvedRef.current;
     const hasPreview = Boolean(resolvedNow?.preview);
+    const appleWantsFull = usesAppleMusic && appleMusicConnected;
 
     unlockPreviewAudio();
 
-    const primedPreview = hasPreview
-      ? playPreviewFromUserGesture(resolvedNow.preview)
-      : null;
-    const previewPlaying =
-      Boolean(primedPreview) &&
-      (isPreviewActivelyPlaying(primedPreview) || hasPreview);
+    // Full track needs the tap gesture on Apple Music — start that first, not preview.
+    const gestureMusic = appleWantsFull ? playAppleMusicFromUserGesture() : null;
 
-    const gestureMusic =
-      usesAppleMusic && appleMusicConnected && !previewPlaying
-        ? playAppleMusicFromUserGesture()
+    const primedPreview =
+      !appleWantsFull && hasPreview
+        ? playPreviewFromUserGesture(resolvedNow.preview)
         : null;
 
-    const preferGesturePreview = Boolean(primedPreview) && hasPreview;
-    const preferFullTrack = usesAppleMusic
-      ? appleMusicConnected && !hasPreview
+    const preferGesturePreview = !appleWantsFull && Boolean(primedPreview) && hasPreview;
+    const preferFullTrack = appleWantsFull
+      ? true
       : Boolean(spotify.loggedIn && spotify.deviceId);
 
     const epoch = ++playbackEpochRef.current;
@@ -1306,7 +1303,12 @@ export default function HitForHit() {
 
         setHostAwaitingTap(false);
         if (result.type === "preview") {
-          showToast("Playing 30s preview", 4000);
+          showToast(
+            appleWantsFull
+              ? "Playing 30s preview — full track unavailable"
+              : "Playing 30s preview",
+            4000
+          );
         } else if (result.type === "apple-music") {
           showToast("Playing full track — keep volume up, silent mode off", 3000);
         } else if (result.type === "spotify") {
