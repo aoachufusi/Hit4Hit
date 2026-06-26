@@ -1666,7 +1666,7 @@ export default function HitForHit() {
             }}
             title={
               connStatus === "error"
-                ? "Sync failed — scroll down for connection test"
+                ? "Sync failed"
                 : "Game sync via Firebase Realtime Database"
             }
           >
@@ -1774,17 +1774,6 @@ export default function HitForHit() {
                 <div className="bf" style={{color:"#f87171",fontSize:13,lineHeight:1.5}}>
                   Firebase is not configured. Add <code>VITE_FIREBASE_*</code> to <code>.env</code>, save the file, and restart <code>npm run dev</code>.
                 </div>
-              </div>
-            )}
-
-            {isFirebaseConfigured && (
-              <div style={{ marginBottom: "1rem" }}>
-                <SyncDiagnosticsPanel
-                  result={syncDiag}
-                  loading={syncDiagLoading}
-                  onRunTest={runSyncDiagnostics}
-                  compact
-                />
               </div>
             )}
 
