@@ -47,10 +47,12 @@ export function SpotifyProvider({ children }) {
   const [playerStatus, setPlayerStatus] = useState("");
   const playerRef = useRef(null);
   const deviceIdRef = useRef(null);
+  const deviceTypeRef = useRef(null);
   const connectPromiseRef = useRef(null);
 
   const setPlaybackDevice = useCallback((id, type) => {
     deviceIdRef.current = id;
+    deviceTypeRef.current = type;
     setDeviceId(id);
     setDeviceType(type);
   }, []);
@@ -120,6 +122,7 @@ export function SpotifyProvider({ children }) {
     if (!session?.access_token) {
       queueMicrotask(() => {
         deviceIdRef.current = null;
+        deviceTypeRef.current = null;
         setDeviceId(null);
         setDeviceType(null);
         setSdkLoaded(false);
@@ -174,7 +177,11 @@ export function SpotifyProvider({ children }) {
     async ({ player, device_id }) => {
       playerRef.current = player;
       const token = await getAccessToken();
-      await transferPlaybackToDevice(token, device_id);
+      try {
+        await transferPlaybackToDevice(token, device_id);
+      } catch (e) {
+        console.warn("Spotify transfer to web player failed (non-fatal)", e);
+      }
       if (typeof player.activateElement === "function") {
         try {
           await player.activateElement();
@@ -241,19 +248,36 @@ export function SpotifyProvider({ children }) {
           return await webPlayerPromise;
         } catch (e) {
           logClientError("Spotify web player failed:", e);
+          if (!isMobileSpotifyClient()) {
+            const detail = formatSpotifyConnectError(e);
+            setPlayerStatus(detail);
+            throw e;
+          }
+        }
+      } else if (!isMobileSpotifyClient()) {
+        const err = new Error(
+          "Spotify player still loading — wait for Loading Spotify… to finish, then tap again"
+        );
+        setPlayerStatus(err.message);
+        throw err;
+      }
+
+      if (isMobileSpotifyClient()) {
+        try {
+          return await connectExternalDevice();
+        } catch (e) {
+          logClientError("Spotify external device failed:", e);
+          const detail =
+            formatSpotifyConnectError(e) ||
+            "Spotify playback unavailable — open the Spotify app and try again";
+          setPlayerStatus(detail);
+          throw e;
         }
       }
 
-      try {
-        return await connectExternalDevice();
-      } catch (e) {
-        logClientError("Spotify external device failed:", e);
-        const detail =
-          formatSpotifyConnectError(e) ||
-          "Spotify playback unavailable — open the Spotify app and try again";
-        setPlayerStatus(detail);
-        throw e;
-      }
+      const err = new Error("Spotify web player failed — log out and log in again");
+      setPlayerStatus(formatSpotifyConnectError(err));
+      throw err;
     };
 
     connectPromiseRef.current = run().finally(() => {
@@ -281,6 +305,7 @@ export function SpotifyProvider({ children }) {
     playerRef.current = null;
     connectPromiseRef.current = null;
     deviceIdRef.current = null;
+    deviceTypeRef.current = null;
     clearStoredSession();
     setSession(null);
     setDeviceId(null);
@@ -311,14 +336,41 @@ export function SpotifyProvider({ children }) {
       if (!id) {
         throw new Error("Spotify player not connected — tap Connect player");
       }
+
+      const player = playerRef.current;
+      if (deviceTypeRef.current === "web" && player) {
+        if (typeof player.activateElement === "function") {
+          try {
+            await player.activateElement();
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
       await playTrackUris(token, id, [uri]);
+
+      if (deviceTypeRef.current === "web" && player) {
+        try {
+          const state = await player.getCurrentState?.();
+          if (!state || state.paused) {
+            await player.resume?.();
+          }
+        } catch {
+          try {
+            await player.resume?.();
+          } catch {
+            /* ignore */
+          }
+        }
+      }
     },
     [getAccessToken]
   );
 
   const pausePlayback = useCallback(async () => {
     const id = deviceIdRef.current;
-    if (deviceType === "web") {
+    if (deviceTypeRef.current === "web") {
       try {
         playerRef.current?.pause?.();
       } catch {
@@ -328,7 +380,7 @@ export function SpotifyProvider({ children }) {
     if (!id) return;
     const token = await getAccessToken();
     await pauseSpotifyDevice(token, id);
-  }, [deviceType, getAccessToken]);
+  }, [getAccessToken]);
 
   const playbackReady = Boolean(deviceId);
 

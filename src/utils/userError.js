@@ -53,7 +53,16 @@ export function formatSpotifyConnectError(err) {
     return "Open the Spotify app, play any song for a few seconds, return to Hit4Hit and tap Connect player again";
   }
   if (/Premium|account_error|subscription/i.test(msg)) {
-    return "Spotify Premium is required for playback in the browser";
+    return "Spotify Premium is required for in-browser playback";
+  }
+  if (/initialization_error|Browser not supported|EME/i.test(msg)) {
+    return "This browser can't run Spotify's web player — try Chrome or host on desktop";
+  }
+  if (/authentication_error|Invalid token scopes/i.test(msg)) {
+    return "Spotify login expired or missing permissions — log out and log in again";
+  }
+  if (/timed out|connection timed out/i.test(msg)) {
+    return "Spotify player timed out — disable ad blockers, then tap Connect player again";
   }
   if (/No Spotify device found|open the Spotify app/i.test(msg)) {
     return msg;

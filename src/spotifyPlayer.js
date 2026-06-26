@@ -17,7 +17,9 @@ export function loadSpotifySdk() {
       done();
     };
 
+    const prevReady = window.onSpotifyWebPlaybackSDKReady;
     window.onSpotifyWebPlaybackSDKReady = () => {
+      prevReady?.();
       finish();
     };
 
@@ -26,7 +28,9 @@ export function loadSpotifySdk() {
       return;
     }
 
-    const existing = document.getElementById("spotify-player-sdk");
+    const existing = document.querySelector(
+      'script[src*="spotify-player.js"], #spotify-player-sdk'
+    );
     if (existing) {
       if (window.Spotify?.Player) {
         finish();
@@ -57,6 +61,13 @@ export function loadSpotifySdk() {
   });
 
   return window.__spotify_sdk_loading;
+}
+
+export function normalizeSpotifyUri(uriOrId) {
+  const s = String(uriOrId || "").trim();
+  if (!s) return s;
+  if (s.startsWith("spotify:")) return s;
+  return `spotify:track:${s}`;
 }
 
 export async function createSpotifyPlayer(getAccessToken) {
@@ -104,6 +115,9 @@ export function createSpotifyPlayerSync(getAccessToken) {
     player.addListener("account_error", ({ message }) =>
       finish(reject, new Error(message))
     );
+    player.addListener("playback_error", ({ message }) => {
+      console.warn("Spotify playback_error", message);
+    });
 
     player.addListener("ready", ({ device_id }) =>
       finish(resolve, { player, device_id })
@@ -206,9 +220,10 @@ export function isMobileSpotifyClient() {
 
 export async function playTrackUris(accessToken, deviceId, uris) {
   const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+  const normalized = uris.map(normalizeSpotifyUri).filter(Boolean);
   await spotifyApi(`/me/player/play${qs}`, accessToken, {
     method: "PUT",
-    body: JSON.stringify({ uris }),
+    body: JSON.stringify({ uris: normalized }),
   });
 }
 
