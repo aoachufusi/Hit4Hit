@@ -9,8 +9,9 @@ export function loadSpotifySdk() {
     };
 
     const timeout = setTimeout(() => {
-      reject(new Error("Spotify SDK load timed out"));
-    }, 20_000);
+      if (window.Spotify?.Player) finish();
+      else reject(new Error("Spotify SDK load timed out"));
+    }, 25_000);
 
     const finish = () => {
       clearTimeout(timeout);
@@ -51,7 +52,20 @@ export function loadSpotifySdk() {
     script.src = "https://sdk.scdn.co/spotify-player.js";
     script.async = true;
     script.onload = () => {
-      if (window.Spotify?.Player) finish();
+      if (window.Spotify?.Player) {
+        finish();
+        return;
+      }
+      let polls = 0;
+      const poll = setInterval(() => {
+        polls += 1;
+        if (window.Spotify?.Player) {
+          clearInterval(poll);
+          finish();
+        } else if (polls >= 50) {
+          clearInterval(poll);
+        }
+      }, 100);
     };
     script.onerror = () => {
       clearTimeout(timeout);
@@ -210,12 +224,28 @@ export function nudgeSpotifyApp() {
   }
 }
 
+/** True phone/tablet — not Mac/Windows desktop Chrome (iPad desktop UA excluded). */
 export function isMobileSpotifyClient() {
   if (typeof navigator === "undefined") return false;
-  return (
-    /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
-    (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent))
-  );
+  const ua = navigator.userAgent;
+  if (/Android|iPhone|iPod|iPad/i.test(ua)) return true;
+  return false;
+}
+
+/** iPad on iOS 13+ may report Macintosh — only treat as mobile when clearly touch-first. */
+export function isSpotifyAppFallbackClient() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  if (/Android|iPhone|iPod|iPad/i.test(ua)) return true;
+  if (
+    /Macintosh/i.test(ua) &&
+    navigator.maxTouchPoints > 1 &&
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(hover: none)")?.matches
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export async function playTrackUris(accessToken, deviceId, uris) {

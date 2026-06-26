@@ -1972,7 +1972,7 @@ export default function HitForHit() {
               <div className="card" style={{padding:"0.85rem 1rem",marginBottom:10,borderColor:"#5b21b6"}}>
                 <div className="bf" style={{color:"#d8b4fe",fontSize:12,lineHeight:1.5}}>
                   {spotify.playerStatus ||
-                    "Tap Connect player. On iPhone: open Spotify, play a song briefly, then return here."}
+                    "Tap Connect player — audio plays in this browser tab on laptop/desktop"}
                 </div>
               </div>
             )}

@@ -50,7 +50,7 @@ export function formatSpotifyConnectError(err) {
     return "This Spotify account isn't allowlisted — add it in the Spotify Developer Dashboard (User Management), or set the app to public";
   }
   if (/Spotify app not detected|No Spotify device found/i.test(msg)) {
-    return "Open the Spotify app, play any song for a few seconds, return to Hit4Hit and tap Connect player again";
+    return "Couldn't find the Spotify app — open it, play a song briefly, then tap Connect player (phone only)";
   }
   if (/Premium|account_error|subscription/i.test(msg)) {
     return "Spotify Premium is required for in-browser playback";
@@ -76,5 +76,5 @@ export function formatSpotifyConnectError(err) {
   if (msg && msg.length <= 140 && !/^\[object Object\]/i.test(msg)) {
     return msg;
   }
-  return "Spotify connect failed — open the Spotify app and try again";
+  return "Spotify connect failed — log out, log in again, then tap Connect player";
 }
