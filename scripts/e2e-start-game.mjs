@@ -3,7 +3,7 @@ import { readFileSync } from "fs";
 
 const url = process.argv[2] || "http://localhost:5175/";
 const env = Object.fromEntries(
-  readFileSync(".env", "utf8")
+  readFileSync("web/.env", "utf8")
     .split("\n")
     .filter((l) => l && !l.startsWith("#") && l.includes("="))
     .map((l) => {

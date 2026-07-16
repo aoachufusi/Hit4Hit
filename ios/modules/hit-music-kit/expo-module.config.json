@@ -1,0 +1,7 @@
+{
+  "name": "hit-music-kit",
+  "platforms": ["ios"],
+  "ios": {
+    "modules": ["HitMusicKitModule"]
+  }
+}

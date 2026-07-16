@@ -7,14 +7,27 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# .gitignore
+# Dependencies
 node_modules/
+
+# Env
 .env
 .env.local
-#*.local
+
+# Builds
 build/
 dist/
 dist-ssr
+web/dist/
+
+# Expo / React Native
+.expo/
+ios/.expo/
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+*.orig.*
 
 # Editor directories and files
 .vscode/*
@@ -27,11 +40,3 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
-
-
-# .gitignore
-#node_modules/
-#.env
-#.env.local
-#build/
-#dist/

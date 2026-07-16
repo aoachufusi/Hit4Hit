@@ -1,0 +1,43 @@
+{
+  "name": "@hit-for-hit/ios",
+  "private": true,
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "build:dev": "eas build --profile development --platform ios",
+    "build:preview": "eas build --profile preview --platform ios",
+    "build:production": "eas build --profile production --platform ios",
+    "submit:production": "eas submit --profile production --platform ios"
+  },
+  "dependencies": {
+    "@hit-for-hit/shared": "*",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/native": "^7.1.6",
+    "@react-navigation/stack": "^7.2.10",
+    "expo": "~57.0.2",
+    "expo-av": "~16.0.7",
+    "expo-haptics": "~57.0.1",
+    "expo-notifications": "~57.0.5",
+    "expo-status-bar": "~57.0.0",
+    "firebase": "^12.14.0",
+    "hit-music-kit": "file:./modules/hit-music-kit",
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.2",
+    "react-native-spotify-remote": "^0.3.10",
+    "react-native-track-player": "^4.1.2"
+  },
+  "devDependencies": {
+    "@expo/config-plugins": "~54.0.0",
+    "@types/react": "~19.1.10",
+    "babel-plugin-module-resolver": "^5.0.2",
+    "typescript": "~5.9.2"
+  }
+}

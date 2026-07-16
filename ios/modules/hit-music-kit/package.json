@@ -1,0 +1,15 @@
+{
+  "name": "hit-music-kit",
+  "version": "1.0.0",
+  "description": "Native MusicKit ApplicationMusicPlayer bridge for Hit 4 Hit",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {},
+  "keywords": ["react-native", "expo", "musickit"],
+  "license": "MIT",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

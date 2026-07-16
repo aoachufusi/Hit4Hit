@@ -1,0 +1,88 @@
+{
+  "expo": {
+    "name": "Hit 4 Hit",
+    "slug": "hit-for-hit",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "hit4hit",
+    "primaryColor": "#A855F7",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0D0A14"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.hit4hit",
+      "buildNumber": "1",
+      "infoPlist": {
+        "CFBundleDisplayName": "Hit 4 Hit",
+        "UIBackgroundModes": ["audio", "remote-notification"],
+        "NSAppleMusicUsageDescription": "Hit 4 Hit needs Apple Music access so the host can play full tracks during party rounds through this device’s speakers, Bluetooth, or AirPlay.",
+        "NSMediaLibraryUsageDescription": "Hit 4 Hit uses your Apple Music library and subscription to play selected battle tracks on the host device.",
+        "NSUserNotificationsUsageDescription": "Hit 4 Hit can send notifications when it’s your turn to pick a song, when judges need to vote, or when a round result is ready.",
+        "LSApplicationQueriesSchemes": ["spotify", "music"],
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "entitlements": {
+        "com.apple.developer.musickit": true
+      },
+      "privacyManifests": {
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": ["CA92.1"]
+          }
+        ]
+      },
+      "config": {
+        "usesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "app.hit4hit",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0D0A14"
+      },
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-av",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#A855F7",
+          "defaultChannel": "game"
+        }
+      ],
+      [
+        "./plugins/withSpotifyRemote.js",
+        {
+          "scheme": "hit4hit",
+          "callbackHost": "spotify-callback"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
+  }
+}
