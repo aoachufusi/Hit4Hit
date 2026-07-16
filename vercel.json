@@ -1,7 +1,8 @@
 {
-  "installCommand": "cd .. && npm install",
-  "buildCommand": "cd .. && npm run build --workspace=web",
-  "outputDirectory": "dist",
+  "installCommand": "npm install",
+  "buildCommand": "npm run build --workspace=web",
+  "outputDirectory": "web/dist",
+  "framework": null,
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
